@@ -18,9 +18,24 @@ while [ $# -gt 0 ]; do
     case $1 in
         --help|-h)
             echo "Usage: sudo ./setup-security.sh --domain <domain> [--domain <domain> ...]"
-            echo "Example: sudo ./setup-security.sh --domain api.example.com --domain member.example.com"
             echo ""
-            echo "This will configure security for all specified domains."
+            echo "Configures server security for all specified domains:"
+            echo ""
+            echo "  1. UFW Firewall - allows only ports configured in security.conf"
+            echo "  2. Nginx Rate Limiting - per-endpoint limits (configurable in security.conf)"
+            echo "  3. Fail2ban - auto-bans IPs for rate limit violations, bad requests, auth failures"
+            echo "  4. Direct IP blocking - only domain-name requests accepted"
+            echo ""
+            echo "All settings are read from security.conf in the same directory."
+            echo ""
+            echo "Example:"
+            echo "  sudo ./setup-security.sh --domain api.example.com --domain member.example.com"
+            echo ""
+            echo "Useful commands after setup:"
+            echo "  sudo fail2ban-client status                    # Check fail2ban status"
+            echo "  sudo fail2ban-client status nginx-limit-req    # Check specific jail"
+            echo "  sudo fail2ban-client unban <IP>                # Unban an IP"
+            echo "  ufw status                                     # Check firewall"
             exit 0
             ;;
         --domain)
