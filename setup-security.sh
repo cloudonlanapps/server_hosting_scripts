@@ -229,62 +229,15 @@ EOF
     echo "    Rate limiting applied to $site_domain -> localhost:$port"
 }
 
-# Function to apply rate limiting to a static site (injects into existing config)
-apply_rate_limiting_static() {
-    local site_domain="$1"
-    local nginx_site="/etc/nginx/sites-available/$site_domain"
-
-    if [ ! -f "$nginx_site" ]; then
-        echo "    Site config not found: $nginx_site (skipping)"
-        return
-    fi
-
-    # Check if rate limiting is already configured
-    if grep -q "limit_req zone" "$nginx_site"; then
-        echo "    Rate limiting already configured for $site_domain"
-        return
-    fi
-
-    echo "    Injecting rate limiting into static site $site_domain..."
-
-    # Create backup
-    cp "$nginx_site" "${nginx_site}.backup.$(date +%Y%m%d_%H%M%S)"
-
-    # Use python for reliable config injection (handles multi-line, preserves structure)
-    python3 << PYEOF
-import re
-
-with open("$nginx_site", "r") as f:
-    content = f.read()
-
-# Inject limit_req and limit_conn after the first "location / {"
-rate_limit_directives = (
-    "        limit_req zone=general_limit burst=${NGINX_GENERAL_BURST} nodelay;\n"
-    "        limit_conn conn_limit ${NGINX_GENERAL_CONN_LIMIT};\n"
-)
-content = content.replace("location / {", "location / {\n" + rate_limit_directives, 1)
-
-# Add client_max_body_size if not present (before first server block closing brace with logging)
-if "client_max_body_size" not in content:
-    # Insert before the access_log line in the first server block
-    content = content.replace("access_log", "client_max_body_size ${NGINX_CLIENT_MAX_BODY_SIZE};\n\n    access_log", 1)
-
-with open("$nginx_site", "w") as f:
-    f.write(content)
-PYEOF
-
-    echo "    Rate limiting injected into $site_domain"
-}
-
-# Apply rate limiting to all specified domains
+# Apply rate limiting to all API proxy domains
 for SITE_DOMAIN in "${DOMAINS[@]}"; do
     apply_rate_limiting "$SITE_DOMAIN"
 done
 
-# Apply rate limiting to static domains
-for SITE_DOMAIN in "${STATIC_DOMAINS[@]}"; do
-    apply_rate_limiting_static "$SITE_DOMAIN"
-done
+# Static domains are listed for documentation but don't need rate limiting
+if [ ${#STATIC_DOMAINS[@]} -gt 0 ]; then
+    echo "    Static domains (no rate limiting applied): ${STATIC_DOMAINS[*]}"
+fi
 
 # Test and reload nginx if any changes were made
 echo "    Testing nginx configuration..."
