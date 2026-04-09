@@ -71,7 +71,6 @@ if [ -z "$DOMAIN" ] || [ -z "$PORT" ]; then
 fi
 
 echo "==> Setting up nginx for $DOMAIN -> localhost:$PORT"
-esac
 
 # Check if running as root
 if [ "$EUID" -ne 0 ]; then
