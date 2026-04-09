@@ -1,7 +1,10 @@
 #!/bin/bash
 set -e
 
-# Usage: ./stop.sh [options]
+# Usage: ./stop.sh --project NAME [options]
+#
+# Required:
+#   --project NAME      Project name (e.g., myproduct)
 #
 # Environment modes:
 #   --prod              Stop production containers
@@ -11,13 +14,17 @@ set -e
 #
 # Stops containers cleanly without removing data volumes.
 
+PROJECT_NAME=""
 STOP_ENV="beta"  # Default to beta for safety
 
 # Parse arguments
 while [ $# -gt 0 ]; do
     case $1 in
         --help|-h)
-            echo "Usage: ./stop.sh [options]"
+            echo "Usage: ./stop.sh --project NAME [options]"
+            echo ""
+            echo "Required:"
+            echo "  --project NAME      Project name (e.g., myproduct)"
             echo ""
             echo "Environment modes:"
             echo "  --prod              Stop production containers"
@@ -27,6 +34,13 @@ while [ $# -gt 0 ]; do
             echo ""
             echo "Stops containers cleanly without removing data volumes."
             exit 0
+            ;;
+        --project)
+            shift
+            PROJECT_NAME="$1"
+            ;;
+        --project=*)
+            PROJECT_NAME="${1#*=}"
             ;;
         --prod)
             STOP_ENV="prod"
@@ -41,6 +55,12 @@ while [ $# -gt 0 ]; do
     shift
 done
 
+if [ -z "$PROJECT_NAME" ]; then
+    echo "ERROR: --project is required (e.g., --project myproduct)"
+    echo "Run ./stop.sh --help for usage."
+    exit 1
+fi
+
 # Function to stop a specific environment
 stop_environment() {
     local env_name="$1"
@@ -50,6 +70,8 @@ stop_environment() {
 
     # Set placeholder values for environment variables referenced in docker-compose.yml
     # These are not used during 'down' but are required to parse the compose file
+    export PROJECT_NAME='placeholder'
+    export GIT_URL='placeholder'
     export POSTGRES_DB='placeholder'
     export POSTGRES_USER='placeholder'
     export POSTGRES_PASSWORD='placeholder'
@@ -67,18 +89,18 @@ stop_environment() {
 
 case $STOP_ENV in
     prod)
-        stop_environment "PRODUCTION" "club-prod"
+        stop_environment "PRODUCTION" "${PROJECT_NAME}-prod"
         ;;
     dev)
-        stop_environment "DEVELOPMENT" "club-dev"
+        stop_environment "DEVELOPMENT" "${PROJECT_NAME}-dev"
         ;;
     all)
-        stop_environment "BETA" "club-beta"
-        stop_environment "PRODUCTION" "club-prod"
-        stop_environment "DEVELOPMENT" "club-dev"
+        stop_environment "BETA" "${PROJECT_NAME}-beta"
+        stop_environment "PRODUCTION" "${PROJECT_NAME}-prod"
+        stop_environment "DEVELOPMENT" "${PROJECT_NAME}-dev"
         ;;
     beta|*)
-        stop_environment "BETA" "club-beta"
+        stop_environment "BETA" "${PROJECT_NAME}-beta"
         ;;
 esac
 
@@ -86,4 +108,4 @@ echo ""
 echo "==> Containers stopped"
 echo ""
 echo "Running containers:"
-docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "club-|NAMES" || echo "  (none)"
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "${PROJECT_NAME}-|NAMES" || echo "  (none)"

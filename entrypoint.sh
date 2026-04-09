@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e
 
+if [ -z "$PROJECT_NAME" ]; then
+    echo "ERROR: PROJECT_NAME environment variable is not set"
+    exit 1
+fi
+
 echo "==> Waiting for PostgreSQL to be ready..."
 
 # Wait for PostgreSQL to accept connections
@@ -21,7 +26,7 @@ echo "==> Running database migrations..."
 uv run alembic upgrade head
 
 echo "==> Bootstrapping sudo user..."
-uv run club_bootstrap "$BOOTSTRAP_PASSWORD"
+uv run ${PROJECT_NAME}_bootstrap "$BOOTSTRAP_PASSWORD"
 
 echo "==> Starting server..."
-exec uv run uvicorn club_server.main:app --host 0.0.0.0 --port 8000
+exec uv run uvicorn ${PROJECT_NAME}_server.main:app --host 0.0.0.0 --port 8000

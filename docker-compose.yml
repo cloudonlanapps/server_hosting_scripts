@@ -1,7 +1,7 @@
 services:
   db:
     image: postgres:16-alpine
-    container_name: ${COMPOSE_PROJECT_NAME:-club}-postgres
+    container_name: ${COMPOSE_PROJECT_NAME}-postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
@@ -22,7 +22,8 @@ services:
       args:
         GITHUB_TOKEN: ${GITHUB_TOKEN:-}
         REPO_BRANCH: ${REPO_BRANCH:-main}
-    container_name: ${COMPOSE_PROJECT_NAME:-club}-server
+        GIT_URL: ${GIT_URL}
+    container_name: ${COMPOSE_PROJECT_NAME}-server
     restart: unless-stopped
     environment:
       # Database connection
@@ -31,6 +32,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
       # App configuration
+      PROJECT_NAME: ${PROJECT_NAME}
       SECRET_KEY: ${SECRET_KEY}
       BOOTSTRAP_PASSWORD: ${BOOTSTRAP_PASSWORD}
       ENVIRONMENT: ${ENVIRONMENT:-production}

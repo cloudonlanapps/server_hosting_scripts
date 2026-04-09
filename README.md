@@ -1,27 +1,41 @@
-# Club Server Docker Deployment
+# FastAPI Server Docker Deployment
 
-Deploy the Club Server using Docker with nginx reverse proxy and HTTPS. Supports multiple environments (beta, production, development) on the same server.
+Deploy any FastAPI server using Docker with nginx reverse proxy and HTTPS. Supports multiple environments (beta, production, development) on the same server.
+
+## Naming Convention
+
+Given `--project myproduct`, all names are derived automatically:
+
+| Component | Pattern | Example |
+|-----------|---------|---------|
+| Server entry point | `<project>_server.main:app` | `myproduct_server.main:app` |
+| Bootstrap command | `<project>_bootstrap` | `myproduct_bootstrap` |
+| DB name & user | `<project>` | `myproduct` |
+| Data dir (prod) | `/var/lib/<project>-server` | `/var/lib/myproduct-server` |
+| Data dir (beta) | `/var/lib/<project>-server-beta` | `/var/lib/myproduct-server-beta` |
+| Data dir (dev) | `./data-<project>` | `./data-myproduct` |
+| Containers | `<project>-<env>-server` | `myproduct-prod-server` |
 
 ## Architecture
 
 ```
-                      ┌─────────────────────────────────────┐
-                      │           Same Linux VPS            │
-                      │                                     │
-beta.domain.com ──────┼──► Nginx ──► :8001 ──► club-beta   │
-                      │                                     │
-www.domain.com  ──────┼──► Nginx ──► :8000 ──► club-prod   │
-domain.com      ──────┤                                     │
-                      └─────────────────────────────────────┘
+                      ┌─────────────────────────────────────────┐
+                      │             Same Linux VPS              │
+                      │                                         │
+beta.domain.com ──────┼──► Nginx ──► :8001 ──► <project>-beta  │
+                      │                                         │
+www.domain.com  ──────┼──► Nginx ──► :8000 ──► <project>-prod  │
+domain.com      ──────┤                                         │
+                      └─────────────────────────────────────────┘
 ```
 
 ## Environments
 
-| Environment | API Domain | Frontend | Port | Data Directory | Git Branch | Default |
-|-------------|------------|----------|------|----------------|------------|---------|
-| **beta** | `member.<domain>` | `beta.<domain>` | 8001 | `/var/lib/club-server-beta` | `main` | ✓ (safe) |
-| **prod** | `api.<domain>` | `www.<domain>` | 8000 | `/var/lib/club-server` | `release` | |
-| **dev** | `localhost` | `localhost:*` | 8000 | `./data` | `main` | |
+| Environment | Port | Data Directory | Git Branch | Default |
+|-------------|------|----------------|------------|---------|
+| **beta** | 8001 | `/var/lib/<project>-server-beta` | `main` | yes (safe) |
+| **prod** | 8000 | `/var/lib/<project>-server` | `release` | |
+| **dev** | 8000 | `./data-<project>` | `main` | |
 
 **Safety:** Scripts default to beta to prevent accidental production updates.
 
@@ -30,42 +44,36 @@ domain.com      ──────┤                                     │
 ### macOS Development
 
 ```bash
-cd server_docker_from_git
 chmod +x *.sh
 
-# Deploy in development mode (default: beta, but --dev uses ./data and allows all CORS)
-./deploy.sh --bootstrap-password mybootstrappass --postgres-password mydbpass --dev
+./deploy.sh --project myproduct --git-url https://github.com/org/myproduct_server.git \
+  --bootstrap-password mybootstrappass --postgres-password mydbpass --dev
 
-# Server accessible at http://localhost:8000
 curl http://localhost:8000/health
 ```
 
 ### Linux Server - Beta Environment
 
 ```bash
-# Deploy beta (default - SAFE)
-./deploy.sh --bootstrap-password mybootstrappass --postgres-password mydbpass --allowed-websites beta.example.com
+./deploy.sh --project myproduct --git-url https://github.com/org/myproduct_server.git \
+  --bootstrap-password mybootstrappass --postgres-password mydbpass \
+  --allowed-websites beta.example.com
 
-# Setup nginx for beta
 sudo ./setup-nginx.sh --domain member.example.com --port 8001
 
-# Verify
 curl https://member.example.com/health
 ```
 
 ### Linux Server - Production Environment
 
 ```bash
-# Deploy production (explicit flag required)
-./deploy.sh --bootstrap-password mybootstrappass --postgres-password mydbpass --allowed-websites www.example.com,example.com --prod
+./deploy.sh --project myproduct --git-url https://github.com/org/myproduct_server.git \
+  --bootstrap-password mybootstrappass --postgres-password mydbpass \
+  --allowed-websites www.example.com,example.com --prod
 
-# Setup nginx for production
 sudo ./setup-nginx.sh --domain api.example.com --port 8000
-
-# Setup security (applies to both environments)
 sudo ./setup-security.sh --domain api.example.com --domain member.example.com
 
-# Verify
 curl https://api.example.com/health
 ```
 
@@ -74,7 +82,7 @@ curl https://api.example.com/health
 ### deploy.sh
 
 ```
-./deploy.sh --bootstrap-password PASS --postgres-password PASS [options]
+./deploy.sh --project NAME --git-url URL --bootstrap-password PASS --postgres-password PASS [options]
 ```
 
 Run `./deploy.sh --help` for full options.
@@ -84,22 +92,18 @@ Run `./deploy.sh --help` for full options.
 Reads non-secret config (port, data-dir, allowed-websites) from `.deploy.env` saved by `deploy.sh`.
 
 ```
-./restart.sh --bootstrap-password PASS --postgres-password PASS --secret-key KEY --beta|--prod|--dev
+./restart.sh --project NAME --bootstrap-password PASS --postgres-password PASS --secret-key KEY [--beta|--prod|--dev]
 ```
 
 Run `./restart.sh --help` for full options.
 
 ### stop.sh
 
-```bash
-./stop.sh [options]
-
-Options:
-  --prod              Stop production containers
-  --dev               Stop development containers
-  --all               Stop all environments (beta, prod, dev)
-  (default)           Stop beta containers
 ```
+./stop.sh --project NAME [--beta|--prod|--dev|--all]
+```
+
+Run `./stop.sh --help` for full options.
 
 ### setup-nginx.sh
 
@@ -127,28 +131,26 @@ Applies security to all specified domains:
 
 ## Container Names
 
-Containers are named based on environment:
+Containers are named based on project and environment:
 
 | Environment | Containers |
 |-------------|------------|
-| beta | `club-beta-server`, `club-beta-postgres` |
-| prod | `club-prod-server`, `club-prod-postgres` |
-| dev | `club-dev-server`, `club-dev-postgres` |
+| beta | `<project>-beta-server`, `<project>-beta-postgres` |
+| prod | `<project>-prod-server`, `<project>-prod-postgres` |
+| dev | `<project>-dev-server`, `<project>-dev-postgres` |
 
 ```bash
-# View running containers
-docker ps | grep club-
+# View running containers (replace myproduct with your project name)
+docker ps | grep myproduct-
 
-# View logs for beta
-docker logs club-beta-server
-
-# View logs for production
-docker logs club-prod-server
+# View logs
+docker logs myproduct-beta-server
+docker logs myproduct-prod-server
 ```
 
 ## CORS Configuration
 
-CORS origins are configured via environment variable `CORS_ALLOWED_ORIGINS`:
+CORS origins are configured via `--allowed-websites`:
 
 | Environment | CORS Origins |
 |-------------|--------------|
@@ -156,28 +158,19 @@ CORS origins are configured via environment variable `CORS_ALLOWED_ORIGINS`:
 | prod | `https://<site1>,https://<site2>,...` (from `--allowed-websites s1,s2`) |
 | dev | `*` (all origins, no `--allowed-websites` needed) |
 
-To verify CORS settings:
-```bash
-docker exec club-beta-server env | grep CORS
-docker exec club-prod-server env | grep CORS
-```
-
 ## Running Both Environments
 
 You can run beta and production simultaneously:
 
 ```bash
-# Deploy beta (default)
-./deploy.sh --bootstrap-password betapass123 --postgres-password dbpass123 --allowed-websites beta.example.com
+# Deploy both
+./deploy.sh --project myproduct --git-url https://github.com/org/myproduct_server.git \
+  --bootstrap-password betapass123 --postgres-password dbpass123 \
+  --allowed-websites beta.example.com
 
-# Deploy production
-./deploy.sh --bootstrap-password prodpass123 --postgres-password dbpass123 --allowed-websites www.example.com,example.com --prod
-
-# Verify both running
-docker ps | grep club-
-# Should show 4 containers:
-# club-beta-server, club-beta-postgres
-# club-prod-server, club-prod-postgres
+./deploy.sh --project myproduct --git-url https://github.com/org/myproduct_server.git \
+  --bootstrap-password prodpass123 --postgres-password dbpass123 \
+  --allowed-websites www.example.com,example.com --prod
 
 # Setup nginx for both
 sudo ./setup-nginx.sh --domain member.example.com --port 8001
@@ -192,42 +185,46 @@ sudo ./setup-security.sh --domain api.example.com --domain member.example.com
 ### Update Beta (safe for testing)
 
 ```bash
-./stop.sh                              # Stops beta only
-./deploy.sh --bootstrap-password betapass --postgres-password dbpass --allowed-websites beta.example.com
+./stop.sh --project myproduct
+./deploy.sh --project myproduct --git-url https://github.com/org/myproduct_server.git \
+  --bootstrap-password betapass --postgres-password dbpass \
+  --allowed-websites beta.example.com
 ```
 
 ### Update Production (careful!)
 
 ```bash
-./stop.sh --prod                              # Stops prod only
-./deploy.sh --bootstrap-password prodpass --postgres-password dbpass --allowed-websites www.example.com,example.com --prod
+./stop.sh --project myproduct --prod
+./deploy.sh --project myproduct --git-url https://github.com/org/myproduct_server.git \
+  --bootstrap-password prodpass --postgres-password dbpass \
+  --allowed-websites www.example.com,example.com --prod
 ```
 
 ## Credentials
 
 The deploy script outputs credentials at the end. Save them securely:
-- **Bootstrap password** - For the "sudo" admin user
-- **Postgres password** - Database password
+- **Bootstrap password** - For the admin user (can be changed on each run)
+- **Postgres password** - Database password (fixed once created)
 - **Secret key** - JWT signing key (auto-generated if not provided)
 
-**Important:** When using `restart.sh`, you must provide the same secret key used during initial deployment.
+**Important:** When using `restart.sh`, provide the same postgres password and secret key.
 
 ## Troubleshooting
 
 ### Container not starting
 ```bash
-docker logs club-beta-server
-docker logs club-prod-server
+docker logs myproduct-beta-server
+docker logs myproduct-prod-server
 ```
 
 ### Check environment variables
 ```bash
-docker exec club-beta-server env | grep -E "CORS|ENVIRONMENT"
+docker exec myproduct-beta-server env | grep -E "CORS|ENVIRONMENT|PROJECT"
 ```
 
 ### Database connection issues
 ```bash
-docker exec -it club-beta-postgres psql -U myclub -d myclub
+docker exec -it myproduct-beta-postgres psql -U myproduct -d myproduct
 ```
 
 ### Check nginx status

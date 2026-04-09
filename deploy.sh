@@ -1,51 +1,69 @@
 #!/bin/bash
 set -e
 
-# Usage: ./deploy.sh --bootstrap-password PASS --postgres-password PASS [options]
+# Usage: ./deploy.sh --project NAME --git-url URL --bootstrap-password PASS --postgres-password PASS [options]
 #
 # Required:
+#   --project NAME              Project name (e.g., myproduct). Used to derive all names.
+#   --git-url URL               Git repository URL (e.g., https://github.com/org/myproduct_server.git)
 #   --bootstrap-password PASS   Password for the bootstrap admin user (can be changed on each run)
 #   --postgres-password PASS    Database password (fixed once created, change only with --reset)
 #
 # Environment modes (mutually exclusive):
-#   --beta              Beta environment (port 8001, /var/lib/club-server-beta) [default]
-#   --prod              Deploy to production (port 8000, /var/lib/club-server)
-#   --dev               Development mode for macOS (port 8000, ./data, all CORS, port exposed)
+#   --beta              Beta environment (port 8001) [default]
+#   --prod              Deploy to production (port 8000)
+#   --dev               Development mode for macOS (port 8000, all CORS, port exposed)
 #
 # Options:
 #   --reset             Drop all tables before starting (fresh database)
 #   --secret-key KEY    JWT signing key (auto-generated if not provided; changing it invalidates existing user sessions)
 #   --github-token TOK  GitHub token for cloning private repo
-#   --data-dir DIR      Custom data directory (default: depends on environment)
-#   --port PORT         Custom port (default: depends on environment)
+#   --data-dir DIR      Custom data directory (default: derived from --project and environment)
+#   --port PORT         Custom port (default: 8001 for beta, 8000 for prod/dev)
 #   --allowed-websites SITES  Domain(s) for CORS, comma-separated (required for --prod and --beta)
 
 show_usage() {
-    echo "Usage: ./deploy.sh --bootstrap-password PASS --postgres-password PASS [options]"
+    echo "Usage: ./deploy.sh --project NAME --git-url URL --bootstrap-password PASS --postgres-password PASS [options]"
     echo ""
     echo "Required:"
+    echo "  --project NAME              Project name (derives DB, dirs, containers)"
+    echo "  --git-url URL               Git repository URL"
     echo "  --bootstrap-password PASS   Password for the bootstrap admin user (can be changed on each run)"
     echo "  --postgres-password PASS    Database password (fixed once created, change only with --reset)"
     echo ""
     echo "Environment modes (mutually exclusive):"
-    echo "  --beta              Beta environment (port 8001, /var/lib/club-server-beta) [default]"
-    echo "  --prod              Deploy to production (port 8000, /var/lib/club-server)"
-    echo "  --dev               Development mode for macOS (port 8000, ./data, all CORS, port exposed)"
+    echo "  --beta              Beta environment (port 8001) [default]"
+    echo "  --prod              Deploy to production (port 8000)"
+    echo "  --dev               Development mode for macOS (port 8000, all CORS, port exposed)"
     echo ""
     echo "Options:"
     echo "  --reset             Drop all tables before starting (fresh database)"
     echo "  --secret-key KEY    JWT signing key (auto-generated if not provided; changing it invalidates existing user sessions)"
     echo "  --github-token TOK  GitHub token for cloning private repo"
-    echo "  --data-dir DIR      Custom data directory (default: /var/lib/club-server-beta, /var/lib/club-server, or ./data)"
+    echo "  --data-dir DIR      Custom data directory (default: /var/lib/<project>-server[-beta] or ./data-<project>)"
     echo "  --port PORT         Custom port (default: 8001 for beta, 8000 for prod/dev)"
     echo "  --allowed-websites SITES  Domain(s) for CORS, comma-separated (required for --prod and --beta)"
     echo ""
+    echo "Naming convention (given --project myproduct):"
+    echo "  Server entry point:  myproduct_server.main:app"
+    echo "  Bootstrap command:   myproduct_bootstrap"
+    echo "  DB name & user:      myproduct"
+    echo "  Data dir (prod):     /var/lib/myproduct-server"
+    echo "  Data dir (beta):     /var/lib/myproduct-server-beta"
+    echo "  Data dir (dev):      ./data-myproduct"
+    echo "  Containers:          myproduct-prod-server, myproduct-beta-postgres, etc."
+    echo ""
     echo "Examples:"
-    echo "  ./deploy.sh --bootstrap-password pass123 --postgres-password dbpass123 --allowed-websites beta.example.com"
-    echo "  ./deploy.sh --bootstrap-password pass123 --postgres-password dbpass123 --allowed-websites www.example.com,example.com --prod"
-    echo "  ./deploy.sh --bootstrap-password pass123 --postgres-password dbpass123 --dev"
+    echo "  ./deploy.sh --project myproduct --git-url https://github.com/org/myproduct_server.git \\"
+    echo "    --bootstrap-password pass123 --postgres-password dbpass123 --allowed-websites beta.example.com"
+    echo "  ./deploy.sh --project myproduct --git-url https://github.com/org/myproduct_server.git \\"
+    echo "    --bootstrap-password pass123 --postgres-password dbpass123 --allowed-websites www.example.com,example.com --prod"
+    echo "  ./deploy.sh --project myproduct --git-url https://github.com/org/myproduct_server.git \\"
+    echo "    --bootstrap-password pass123 --postgres-password dbpass123 --dev"
 }
 
+PROJECT_NAME=""
+GIT_URL=""
 BOOTSTRAP_PASSWORD=""
 POSTGRES_PASSWORD=""
 SECRET_KEY=""
@@ -62,6 +80,20 @@ while [ $# -gt 0 ]; do
         --help|-h)
             show_usage
             exit 0
+            ;;
+        --project)
+            shift
+            PROJECT_NAME="$1"
+            ;;
+        --project=*)
+            PROJECT_NAME="${1#*=}"
+            ;;
+        --git-url)
+            shift
+            GIT_URL="$1"
+            ;;
+        --git-url=*)
+            GIT_URL="${1#*=}"
             ;;
         --bootstrap-password)
             shift
@@ -134,8 +166,8 @@ while [ $# -gt 0 ]; do
 done
 
 # Validate required arguments
-if [ -z "$BOOTSTRAP_PASSWORD" ] || [ -z "$POSTGRES_PASSWORD" ]; then
-    echo "ERROR: --bootstrap-password and --postgres-password are required"
+if [ -z "$PROJECT_NAME" ] || [ -z "$GIT_URL" ] || [ -z "$BOOTSTRAP_PASSWORD" ] || [ -z "$POSTGRES_PASSWORD" ]; then
+    echo "ERROR: --project, --git-url, --bootstrap-password, and --postgres-password are required"
     show_usage
     exit 1
 fi
@@ -169,24 +201,24 @@ fi
 case $DEPLOY_ENV in
     prod)
         DEFAULT_PORT=8000
-        DEFAULT_DATA_DIR="/var/lib/club-server"
-        COMPOSE_PROJECT_NAME="club-prod"
+        DEFAULT_DATA_DIR="/var/lib/${PROJECT_NAME}-server"
+        COMPOSE_PROJECT_NAME="${PROJECT_NAME}-prod"
         ENVIRONMENT="production"
         REPO_BRANCH="release"
         echo "==> Deploying to PRODUCTION environment (branch: release)"
         ;;
     dev)
         DEFAULT_PORT=8000
-        DEFAULT_DATA_DIR="./data"
-        COMPOSE_PROJECT_NAME="club-dev"
+        DEFAULT_DATA_DIR="./data-${PROJECT_NAME}"
+        COMPOSE_PROJECT_NAME="${PROJECT_NAME}-dev"
         ENVIRONMENT="development"
         REPO_BRANCH="main"
         echo "==> Deploying to DEVELOPMENT environment (branch: main)"
         ;;
     beta|*)
         DEFAULT_PORT=8001
-        DEFAULT_DATA_DIR="/var/lib/club-server-beta"
-        COMPOSE_PROJECT_NAME="club-beta"
+        DEFAULT_DATA_DIR="/var/lib/${PROJECT_NAME}-server-beta"
+        COMPOSE_PROJECT_NAME="${PROJECT_NAME}-beta"
         ENVIRONMENT="production"  # Beta runs in production mode but with beta CORS
         REPO_BRANCH="main"
         echo "==> Deploying to BETA environment (branch: main)"
@@ -205,20 +237,21 @@ fi
 PORT="${CUSTOM_PORT:-$DEFAULT_PORT}"
 DATA_DIR="${CUSTOM_DATA_DIR:-$DEFAULT_DATA_DIR}"
 
-# Configuration
-POSTGRES_DB="myclub"
-POSTGRES_USER="myclub"
+# Configuration derived from project name
+POSTGRES_DB="$PROJECT_NAME"
+POSTGRES_USER="$PROJECT_NAME"
 
-echo "==> Environment: $DEPLOY_ENV"
+echo "==> Project: $PROJECT_NAME"
+echo "    Git URL: $GIT_URL"
+echo "    Environment: $DEPLOY_ENV"
 echo "    Branch: $REPO_BRANCH"
 echo "    Port: $PORT"
 echo "    Data directory: $DATA_DIR"
 echo "    CORS origins: $CORS_ALLOWED_ORIGINS"
-echo "    Project name: $COMPOSE_PROJECT_NAME"
+echo "    Compose project: $COMPOSE_PROJECT_NAME"
 
 echo "==> Creating data directories..."
 if [ "$DEPLOY_ENV" = "dev" ]; then
-    # For dev mode, don't use sudo (macOS local development)
     mkdir -p "$DATA_DIR/db"
     mkdir -p "$DATA_DIR/uploads"
     mkdir -p "$DATA_DIR/static"
@@ -234,6 +267,8 @@ DEPLOY_CONFIG="$DATA_DIR/.deploy.env"
 echo "==> Saving deployment config to $DEPLOY_CONFIG..."
 if [ "$DEPLOY_ENV" = "dev" ]; then
     cat > "$DEPLOY_CONFIG" << EOF
+PROJECT_NAME=$PROJECT_NAME
+GIT_URL=$GIT_URL
 DEPLOY_ENV=$DEPLOY_ENV
 PORT=$PORT
 DATA_DIR=$DATA_DIR
@@ -244,6 +279,8 @@ ALLOWED_WEBSITES=$ALLOWED_WEBSITES
 EOF
 else
     sudo tee "$DEPLOY_CONFIG" > /dev/null << EOF
+PROJECT_NAME=$PROJECT_NAME
+GIT_URL=$GIT_URL
 DEPLOY_ENV=$DEPLOY_ENV
 PORT=$PORT
 DATA_DIR=$DATA_DIR
@@ -268,6 +305,8 @@ else
 fi
 
 # Export environment variables for docker-compose
+export PROJECT_NAME
+export GIT_URL
 export POSTGRES_DB
 export POSTGRES_USER
 export POSTGRES_PASSWORD
@@ -314,11 +353,8 @@ wait_for_healthy() {
     echo "==> Waiting for services to become healthy (timeout: ${timeout}s)..."
 
     while [ $elapsed -lt $timeout ]; do
-        # Get health status of both containers
         local db_health=$(docker inspect --format='{{.State.Health.Status}}' "$db_container" 2>/dev/null || echo "unknown")
         local server_health=$(docker inspect --format='{{.State.Health.Status}}' "$server_container" 2>/dev/null || echo "unknown")
-
-        # Check if server container is running at all
         local server_running=$(docker inspect --format='{{.State.Running}}' "$server_container" 2>/dev/null || echo "false")
 
         if [ "$server_running" = "false" ]; then
@@ -335,10 +371,8 @@ wait_for_healthy() {
             return 1
         fi
 
-        # Display current status
         printf "\r  [%3ds] db: %-10s | server: %-10s" "$elapsed" "$db_health" "$server_health"
 
-        # Check if both are healthy
         if [ "$db_health" = "healthy" ] && [ "$server_health" = "healthy" ]; then
             local end_time=$(date +%s)
             local total_time=$((end_time - start_time))

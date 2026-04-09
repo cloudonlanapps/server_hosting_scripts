@@ -1,12 +1,13 @@
 #!/bin/bash
 set -e
 
-# Usage: ./restart.sh --bootstrap-password PASS --postgres-password PASS --secret-key KEY [options]
+# Usage: ./restart.sh --project NAME --bootstrap-password PASS --postgres-password PASS --secret-key KEY [options]
 #
 # Reads non-secret deployment config from $DATA_DIR/.deploy.env (saved by deploy.sh).
 # Only secrets must be provided on the command line.
 #
 # Required:
+#   --project NAME              Project name (used to find data directory and config)
 #   --bootstrap-password PASS   Password for the bootstrap admin user (can be changed on each run)
 #   --postgres-password PASS    Database password (must match existing database)
 #   --secret-key KEY            JWT signing key (changing it invalidates existing user sessions)
@@ -17,12 +18,13 @@ set -e
 #   --dev               Restart development containers
 
 show_usage() {
-    echo "Usage: ./restart.sh --bootstrap-password PASS --postgres-password PASS --secret-key KEY [options]"
+    echo "Usage: ./restart.sh --project NAME --bootstrap-password PASS --postgres-password PASS --secret-key KEY [options]"
     echo ""
     echo "Reads deployment config (port, data-dir, allowed-websites, etc.) from"
     echo "the .deploy.env file saved by deploy.sh. Only secrets are needed here."
     echo ""
     echo "Required:"
+    echo "  --project NAME              Project name (used to find data directory and config)"
     echo "  --bootstrap-password PASS   Password for the bootstrap admin user (can be changed on each run)"
     echo "  --postgres-password PASS    Database password (must match existing database)"
     echo "  --secret-key KEY            JWT signing key (changing it invalidates existing user sessions)"
@@ -33,11 +35,12 @@ show_usage() {
     echo "  --dev               Restart development containers"
     echo ""
     echo "Examples:"
-    echo "  ./restart.sh --bootstrap-password pass123 --postgres-password dbpass123 --secret-key KEY --beta"
-    echo "  ./restart.sh --bootstrap-password pass123 --postgres-password dbpass123 --secret-key KEY --prod"
-    echo "  ./restart.sh --bootstrap-password pass123 --postgres-password dbpass123 --secret-key KEY --dev"
+    echo "  ./restart.sh --project myproduct --bootstrap-password pass123 --postgres-password dbpass123 --secret-key KEY --beta"
+    echo "  ./restart.sh --project myproduct --bootstrap-password pass123 --postgres-password dbpass123 --secret-key KEY --prod"
+    echo "  ./restart.sh --project myproduct --bootstrap-password pass123 --postgres-password dbpass123 --secret-key KEY --dev"
 }
 
+PROJECT_NAME=""
 BOOTSTRAP_PASSWORD=""
 POSTGRES_PASSWORD=""
 SECRET_KEY=""
@@ -49,6 +52,13 @@ while [ $# -gt 0 ]; do
         --help|-h)
             show_usage
             exit 0
+            ;;
+        --project)
+            shift
+            PROJECT_NAME="$1"
+            ;;
+        --project=*)
+            PROJECT_NAME="${1#*=}"
             ;;
         --bootstrap-password)
             shift
@@ -90,17 +100,17 @@ while [ $# -gt 0 ]; do
 done
 
 # Validate required arguments
-if [ -z "$BOOTSTRAP_PASSWORD" ] || [ -z "$POSTGRES_PASSWORD" ] || [ -z "$SECRET_KEY" ]; then
-    echo "ERROR: --bootstrap-password, --postgres-password, and --secret-key are required"
+if [ -z "$PROJECT_NAME" ] || [ -z "$BOOTSTRAP_PASSWORD" ] || [ -z "$POSTGRES_PASSWORD" ] || [ -z "$SECRET_KEY" ]; then
+    echo "ERROR: --project, --bootstrap-password, --postgres-password, and --secret-key are required"
     show_usage
     exit 1
 fi
 
 # Determine default data directory to find config file
 case $DEPLOY_ENV in
-    prod)   DEFAULT_DATA_DIR="/var/lib/club-server" ;;
-    dev)    DEFAULT_DATA_DIR="./data" ;;
-    beta|*) DEFAULT_DATA_DIR="/var/lib/club-server-beta" ;;
+    prod)   DEFAULT_DATA_DIR="/var/lib/${PROJECT_NAME}-server" ;;
+    dev)    DEFAULT_DATA_DIR="./data-${PROJECT_NAME}" ;;
+    beta|*) DEFAULT_DATA_DIR="/var/lib/${PROJECT_NAME}-server-beta" ;;
 esac
 
 # Load deployment config saved by deploy.sh
@@ -131,9 +141,11 @@ else
 fi
 
 # Export environment variables for docker-compose
+export PROJECT_NAME
+export GIT_URL
 export POSTGRES_PASSWORD
-export POSTGRES_USER='myclub'
-export POSTGRES_DB='myclub'
+export POSTGRES_USER="$PROJECT_NAME"
+export POSTGRES_DB="$PROJECT_NAME"
 export SECRET_KEY
 export BOOTSTRAP_PASSWORD
 export DATA_DIR
@@ -163,11 +175,8 @@ wait_for_healthy() {
     echo "==> Waiting for services to become healthy (timeout: ${timeout}s)..."
 
     while [ $elapsed -lt $timeout ]; do
-        # Get health status of both containers
         local db_health=$(docker inspect --format='{{.State.Health.Status}}' "$db_container" 2>/dev/null || echo "unknown")
         local server_health=$(docker inspect --format='{{.State.Health.Status}}' "$server_container" 2>/dev/null || echo "unknown")
-
-        # Check if server container is running at all
         local server_running=$(docker inspect --format='{{.State.Running}}' "$server_container" 2>/dev/null || echo "false")
 
         if [ "$server_running" = "false" ]; then
@@ -184,10 +193,8 @@ wait_for_healthy() {
             return 1
         fi
 
-        # Display current status
         printf "\r  [%3ds] db: %-10s | server: %-10s" "$elapsed" "$db_health" "$server_health"
 
-        # Check if both are healthy
         if [ "$db_health" = "healthy" ] && [ "$server_health" = "healthy" ]; then
             local end_time=$(date +%s)
             local total_time=$((end_time - start_time))
