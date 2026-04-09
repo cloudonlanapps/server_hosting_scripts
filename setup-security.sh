@@ -207,6 +207,15 @@ bantime = ${F2B_SSHD_BANTIME}
 maxretry = ${F2B_SSHD_MAXRETRY}
 EOF
 
+# Remove sshd section from jail.local if it exists (our jail.d/nginx.conf manages it)
+JAIL_LOCAL="/etc/fail2ban/jail.local"
+if [ -f "$JAIL_LOCAL" ] && grep -q "^\[sshd\]" "$JAIL_LOCAL"; then
+    echo "    Removing sshd section from $JAIL_LOCAL (managed by jail.d/nginx.conf)..."
+    sed -i '/^\[sshd\]/,/^\[/{/^\[sshd\]/d;/^\[/!d;}' "$JAIL_LOCAL"
+    # Clean up empty lines left behind
+    sed -i '/^$/N;/^\n$/d' "$JAIL_LOCAL"
+fi
+
 # Restart fail2ban
 systemctl restart fail2ban
 systemctl enable fail2ban
