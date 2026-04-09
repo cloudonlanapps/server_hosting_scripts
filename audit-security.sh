@@ -317,37 +317,25 @@ check_jail() {
         fi
     fi
 
-    # Parse values from config file using awk to get jail-specific sections
-    # Extract the section for this jail
-    local JAIL_SECTION
-    JAIL_SECTION=$(awk "/\\[${JAIL_NAME}\\]/,/^\\[/" "$F2B_CONF")
-
-    # Parse value from "key = value" or "key=value" format
-    parse_jail_value() {
-        echo "$JAIL_SECTION" | grep "^$1" | sed 's/[[:space:]]*=[[:space:]]*/=/' | cut -d'=' -f2 | tr -d '[:space:]'
-    }
-
-    # Check findtime
+    # Query runtime values from fail2ban-client (more reliable than parsing config)
     local ACTUAL_FINDTIME
-    ACTUAL_FINDTIME=$(parse_jail_value "findtime")
+    ACTUAL_FINDTIME=$(fail2ban-client get "$JAIL_NAME" findtime 2>/dev/null || echo "")
     if [ "$ACTUAL_FINDTIME" = "$EXPECTED_FINDTIME" ]; then
         pass "findtime = $EXPECTED_FINDTIME"
     else
         fail "findtime" "$EXPECTED_FINDTIME" "${ACTUAL_FINDTIME:-not found}"
     fi
 
-    # Check bantime
     local ACTUAL_BANTIME
-    ACTUAL_BANTIME=$(parse_jail_value "bantime")
+    ACTUAL_BANTIME=$(fail2ban-client get "$JAIL_NAME" bantime 2>/dev/null || echo "")
     if [ "$ACTUAL_BANTIME" = "$EXPECTED_BANTIME" ]; then
         pass "bantime = $EXPECTED_BANTIME"
     else
         fail "bantime" "$EXPECTED_BANTIME" "${ACTUAL_BANTIME:-not found}"
     fi
 
-    # Check maxretry
     local ACTUAL_MAXRETRY
-    ACTUAL_MAXRETRY=$(parse_jail_value "maxretry")
+    ACTUAL_MAXRETRY=$(fail2ban-client get "$JAIL_NAME" maxretry 2>/dev/null || echo "")
     if [ "$ACTUAL_MAXRETRY" = "$EXPECTED_MAXRETRY" ]; then
         pass "maxretry = $EXPECTED_MAXRETRY"
     else
@@ -369,8 +357,7 @@ check_jail "sshd" "SSH Brute Force" \
 
 # Check sshd port in fail2ban config
 if [ -f "$F2B_CONF" ]; then
-    SSHD_SECTION=$(awk '/\[sshd\]/,/^\[/' "$F2B_CONF")
-    ACTUAL_PORT=$(echo "$SSHD_SECTION" | grep "^port" | sed 's/[[:space:]]*=[[:space:]]*/=/' | cut -d'=' -f2 | tr -d '[:space:]')
+    ACTUAL_PORT=$(fail2ban-client get sshd port 2>/dev/null | grep -oP '\d+' | head -1 || echo "")
     if [ "$ACTUAL_PORT" = "$F2B_SSHD_PORT" ]; then
         pass "sshd jail port = $F2B_SSHD_PORT"
     else

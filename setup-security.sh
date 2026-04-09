@@ -229,11 +229,10 @@ EOF
     echo "    Rate limiting applied to $site_domain -> localhost:$port"
 }
 
-# Function to apply rate limiting to a static site
+# Function to apply rate limiting to a static site (injects into existing config)
 apply_rate_limiting_static() {
     local site_domain="$1"
     local nginx_site="/etc/nginx/sites-available/$site_domain"
-    local web_root="/var/www/$site_domain"
 
     if [ ! -f "$nginx_site" ]; then
         echo "    Site config not found: $nginx_site (skipping)"
@@ -246,36 +245,35 @@ apply_rate_limiting_static() {
         return
     fi
 
-    echo "    Adding rate limiting to static site $site_domain..."
+    echo "    Injecting rate limiting into static site $site_domain..."
 
-    cat > "$nginx_site" << EOF
-server {
-    listen 80;
-    listen [::]:80;
-    server_name $site_domain;
+    # Create backup
+    cp "$nginx_site" "${nginx_site}.backup.$(date +%Y%m%d_%H%M%S)"
 
-    root $web_root;
-    index index.html;
+    # Use python for reliable config injection (handles multi-line, preserves structure)
+    python3 << PYEOF
+import re
 
-    # Allow certbot challenge
-    location /.well-known/acme-challenge/ {
-        root /var/www/html;
-    }
+with open("$nginx_site", "r") as f:
+    content = f.read()
 
-    # General rate limiting
-    location / {
-        limit_req zone=general_limit burst=${NGINX_GENERAL_BURST} nodelay;
-        limit_conn conn_limit ${NGINX_GENERAL_CONN_LIMIT};
+# Inject limit_req and limit_conn after the first "location / {"
+rate_limit_directives = (
+    "        limit_req zone=general_limit burst=${NGINX_GENERAL_BURST} nodelay;\n"
+    "        limit_conn conn_limit ${NGINX_GENERAL_CONN_LIMIT};\n"
+)
+content = content.replace("location / {", "location / {\n" + rate_limit_directives, 1)
 
-        try_files \$uri \$uri/ /index.html;
-    }
+# Add client_max_body_size if not present (before first server block closing brace with logging)
+if "client_max_body_size" not in content:
+    # Insert before the access_log line in the first server block
+    content = content.replace("access_log", "client_max_body_size ${NGINX_CLIENT_MAX_BODY_SIZE};\n\n    access_log", 1)
 
-    # Increase max body size
-    client_max_body_size ${NGINX_CLIENT_MAX_BODY_SIZE};
-}
-EOF
+with open("$nginx_site", "w") as f:
+    f.write(content)
+PYEOF
 
-    echo "    Rate limiting applied to static site $site_domain"
+    echo "    Rate limiting injected into $site_domain"
 }
 
 # Apply rate limiting to all specified domains
