@@ -47,13 +47,16 @@ fi
 source "$CONFIG_FILE"
 
 DOMAINS=()
+STATIC_DOMAINS=()
 
 # Parse arguments
 while [ $# -gt 0 ]; do
     case $1 in
         --help|-h)
-            echo "Usage: sudo ./audit-security.sh --domain <domain> [--domain <domain> ...]"
+            echo "Usage: sudo ./audit-security.sh --domain <domain> [--domain <domain> ...] [--static-domain <domain> ...]"
             echo "Checks server security configuration against security.conf requirements."
+            echo "  --domain: API proxy domains"
+            echo "  --static-domain: Static website domains"
             echo "Does NOT make any changes - only reports PASS/FAIL."
             exit 0
             ;;
@@ -63,6 +66,13 @@ while [ $# -gt 0 ]; do
             ;;
         --domain=*)
             DOMAINS+=("${1#*=}")
+            ;;
+        --static-domain)
+            shift
+            STATIC_DOMAINS+=("${1:-}")
+            ;;
+        --static-domain=*)
+            STATIC_DOMAINS+=("${1#*=}")
             ;;
     esac
     shift
@@ -78,7 +88,8 @@ echo "=========================================="
 echo "Security Audit"
 echo "=========================================="
 echo "Config: $CONFIG_FILE"
-[ ${#DOMAINS[@]} -gt 0 ] && echo "Domains: ${DOMAINS[*]}"
+[ ${#DOMAINS[@]} -gt 0 ] && echo "API Domains: ${DOMAINS[*]}"
+[ ${#STATIC_DOMAINS[@]} -gt 0 ] && echo "Static Domains: ${STATIC_DOMAINS[*]}"
 echo ""
 
 # ============================================
@@ -165,20 +176,25 @@ fi
 # ============================================
 # 3. Nginx Site Configs (per domain)
 # ============================================
-if [ ${#DOMAINS[@]} -gt 0 ]; then
-    echo ""
-    echo "==> Nginx Site Configs"
+# Helper to audit a single nginx site config
+audit_site_config() {
+    local SITE_DOMAIN="$1"
+    local IS_STATIC="$2"
+    local SITE_CONF="/etc/nginx/sites-available/${SITE_DOMAIN}"
 
-    for SITE_DOMAIN in "${DOMAINS[@]}"; do
-        SITE_CONF="/etc/nginx/sites-available/${SITE_DOMAIN}"
+    if [ ! -f "$SITE_CONF" ]; then
+        warn "Site config not found: $SITE_CONF (skipping)"
+        return
+    fi
 
-        if [ ! -f "$SITE_CONF" ]; then
-            warn "Site config not found: $SITE_CONF (skipping)"
-            continue
-        fi
-
+    if [ "$IS_STATIC" = "true" ]; then
+        echo "  --- ${SITE_DOMAIN} (static) ---"
+    else
         echo "  --- ${SITE_DOMAIN} ---"
+    fi
 
+    # API proxy domains: check auth and api rate limits
+    if [ "$IS_STATIC" != "true" ]; then
         # Check auth burst
         if grep -q "zone=auth_limit burst=${NGINX_AUTH_BURST}" "$SITE_CONF"; then
             pass "Auth burst=${NGINX_AUTH_BURST}"
@@ -210,35 +226,49 @@ if [ ${#DOMAINS[@]} -gt 0 ]; then
             ACTUAL=$(grep -A2 "zone=api_limit" "$SITE_CONF" | grep "conn_limit" | grep -oP '\d+' || echo "not found")
             fail "API conn_limit" "${NGINX_API_CONN_LIMIT}" "$ACTUAL"
         fi
+    fi
 
-        # Check general burst
-        if grep -q "zone=general_limit burst=${NGINX_GENERAL_BURST}" "$SITE_CONF"; then
-            pass "General burst=${NGINX_GENERAL_BURST}"
-        else
-            ACTUAL=$(grep "zone=general_limit" "$SITE_CONF" | grep -oP 'burst=\d+' || echo "not found")
-            fail "General burst" "burst=${NGINX_GENERAL_BURST}" "$ACTUAL"
-        fi
+    # All domains: check general rate limit
+    # Check general burst
+    if grep -q "zone=general_limit burst=${NGINX_GENERAL_BURST}" "$SITE_CONF"; then
+        pass "General burst=${NGINX_GENERAL_BURST}"
+    else
+        ACTUAL=$(grep "zone=general_limit" "$SITE_CONF" | grep -oP 'burst=\d+' || echo "not found")
+        fail "General burst" "burst=${NGINX_GENERAL_BURST}" "$ACTUAL"
+    fi
 
-        # Check general conn limit
-        if grep -A1 "zone=general_limit" "$SITE_CONF" | grep -q "conn_limit ${NGINX_GENERAL_CONN_LIMIT}"; then
-            pass "General conn_limit=${NGINX_GENERAL_CONN_LIMIT}"
-        else
-            ACTUAL=$(grep -A2 "zone=general_limit" "$SITE_CONF" | grep "conn_limit" | grep -oP '\d+' || echo "not found")
-            fail "General conn_limit" "${NGINX_GENERAL_CONN_LIMIT}" "$ACTUAL"
-        fi
+    # Check general conn limit
+    if grep -A1 "zone=general_limit" "$SITE_CONF" | grep -q "conn_limit ${NGINX_GENERAL_CONN_LIMIT}"; then
+        pass "General conn_limit=${NGINX_GENERAL_CONN_LIMIT}"
+    else
+        ACTUAL=$(grep -A2 "zone=general_limit" "$SITE_CONF" | grep "conn_limit" | grep -oP '\d+' || echo "not found")
+        fail "General conn_limit" "${NGINX_GENERAL_CONN_LIMIT}" "$ACTUAL"
+    fi
 
-        # Check client_max_body_size
-        if grep -q "client_max_body_size ${NGINX_CLIENT_MAX_BODY_SIZE}" "$SITE_CONF"; then
-            pass "client_max_body_size=${NGINX_CLIENT_MAX_BODY_SIZE}"
-        else
-            ACTUAL=$(grep "client_max_body_size" "$SITE_CONF" | awk '{print $2}' | tr -d ';' || echo "not found")
-            fail "client_max_body_size" "${NGINX_CLIENT_MAX_BODY_SIZE}" "$ACTUAL"
-        fi
+    # Check client_max_body_size
+    if grep -q "client_max_body_size ${NGINX_CLIENT_MAX_BODY_SIZE}" "$SITE_CONF"; then
+        pass "client_max_body_size=${NGINX_CLIENT_MAX_BODY_SIZE}"
+    else
+        ACTUAL=$(grep "client_max_body_size" "$SITE_CONF" | awk '{print $2}' | tr -d ';' || echo "not found")
+        fail "client_max_body_size" "${NGINX_CLIENT_MAX_BODY_SIZE}" "$ACTUAL"
+    fi
+}
+
+if [ ${#DOMAINS[@]} -gt 0 ] || [ ${#STATIC_DOMAINS[@]} -gt 0 ]; then
+    echo ""
+    echo "==> Nginx Site Configs"
+
+    for SITE_DOMAIN in "${DOMAINS[@]}"; do
+        audit_site_config "$SITE_DOMAIN" "false"
+    done
+
+    for SITE_DOMAIN in "${STATIC_DOMAINS[@]}"; do
+        audit_site_config "$SITE_DOMAIN" "true"
     done
 else
     echo ""
     warn "No domain provided - skipping nginx site config checks."
-    echo "       Run with: sudo ./audit-security.sh --domain <domain> [--domain <domain> ...]"
+    echo "       Run with: sudo ./audit-security.sh --domain <domain> [--static-domain <domain> ...]"
 fi
 
 # ============================================
@@ -292,9 +322,14 @@ check_jail() {
     local JAIL_SECTION
     JAIL_SECTION=$(awk "/\\[${JAIL_NAME}\\]/,/^\\[/" "$F2B_CONF")
 
+    # Parse value from "key = value" or "key=value" format
+    parse_jail_value() {
+        echo "$JAIL_SECTION" | grep "^$1" | sed 's/[[:space:]]*=[[:space:]]*/=/' | cut -d'=' -f2 | tr -d '[:space:]'
+    }
+
     # Check findtime
     local ACTUAL_FINDTIME
-    ACTUAL_FINDTIME=$(echo "$JAIL_SECTION" | grep "^findtime" | awk '{print $3}')
+    ACTUAL_FINDTIME=$(parse_jail_value "findtime")
     if [ "$ACTUAL_FINDTIME" = "$EXPECTED_FINDTIME" ]; then
         pass "findtime = $EXPECTED_FINDTIME"
     else
@@ -303,7 +338,7 @@ check_jail() {
 
     # Check bantime
     local ACTUAL_BANTIME
-    ACTUAL_BANTIME=$(echo "$JAIL_SECTION" | grep "^bantime" | awk '{print $3}')
+    ACTUAL_BANTIME=$(parse_jail_value "bantime")
     if [ "$ACTUAL_BANTIME" = "$EXPECTED_BANTIME" ]; then
         pass "bantime = $EXPECTED_BANTIME"
     else
@@ -312,7 +347,7 @@ check_jail() {
 
     # Check maxretry
     local ACTUAL_MAXRETRY
-    ACTUAL_MAXRETRY=$(echo "$JAIL_SECTION" | grep "^maxretry" | awk '{print $3}')
+    ACTUAL_MAXRETRY=$(parse_jail_value "maxretry")
     if [ "$ACTUAL_MAXRETRY" = "$EXPECTED_MAXRETRY" ]; then
         pass "maxretry = $EXPECTED_MAXRETRY"
     else
@@ -335,7 +370,7 @@ check_jail "sshd" "SSH Brute Force" \
 # Check sshd port in fail2ban config
 if [ -f "$F2B_CONF" ]; then
     SSHD_SECTION=$(awk '/\[sshd\]/,/^\[/' "$F2B_CONF")
-    ACTUAL_PORT=$(echo "$SSHD_SECTION" | grep "^port" | awk '{print $3}')
+    ACTUAL_PORT=$(echo "$SSHD_SECTION" | grep "^port" | sed 's/[[:space:]]*=[[:space:]]*/=/' | cut -d'=' -f2 | tr -d '[:space:]')
     if [ "$ACTUAL_PORT" = "$F2B_SSHD_PORT" ]; then
         pass "sshd jail port = $F2B_SSHD_PORT"
     else

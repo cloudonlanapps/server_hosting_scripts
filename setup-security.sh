@@ -1,23 +1,25 @@
 #!/bin/bash
 set -e
 
-# Usage: sudo ./setup-security.sh --domain <domain> [--domain <domain> ...]
-# Example: sudo ./setup-security.sh --domain api.example.com --domain member.example.com
+# Usage: sudo ./setup-security.sh --domain <domain> [--domain <domain> ...] [--static-domain <domain> ...]
+# Example: sudo ./setup-security.sh --domain api.example.com --static-domain beta.example.com
 #
 # Sets up UFW firewall, nginx rate limiting, and fail2ban.
-# Applies rate limiting to all specified domains.
+# --domain: API proxy domains (have proxy_pass)
+# --static-domain: Static website domains (served from /var/www/)
 # All settings are read from security.conf.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="${SCRIPT_DIR}/security.conf"
 
 DOMAINS=()
+STATIC_DOMAINS=()
 
 # Parse arguments
 while [ $# -gt 0 ]; do
     case $1 in
         --help|-h)
-            echo "Usage: sudo ./setup-security.sh --domain <domain> [--domain <domain> ...]"
+            echo "Usage: sudo ./setup-security.sh --domain <domain> [--domain <domain> ...] [--static-domain <domain> ...]"
             echo ""
             echo "Configures server security for all specified domains:"
             echo ""
@@ -28,8 +30,12 @@ while [ $# -gt 0 ]; do
             echo ""
             echo "All settings are read from security.conf in the same directory."
             echo ""
+            echo "Options:"
+            echo "  --domain <domain>         API proxy domain (has proxy_pass to backend)"
+            echo "  --static-domain <domain>  Static website domain (served from /var/www/<domain>/)"
+            echo ""
             echo "Example:"
-            echo "  sudo ./setup-security.sh --domain api.example.com --domain member.example.com"
+            echo "  sudo ./setup-security.sh --domain api.example.com --static-domain beta.example.com"
             echo ""
             echo "Useful commands after setup:"
             echo "  sudo fail2ban-client status                    # Check fail2ban status"
@@ -45,13 +51,20 @@ while [ $# -gt 0 ]; do
         --domain=*)
             DOMAINS+=("${1#*=}")
             ;;
+        --static-domain)
+            shift
+            STATIC_DOMAINS+=("$1")
+            ;;
+        --static-domain=*)
+            STATIC_DOMAINS+=("${1#*=}")
+            ;;
     esac
     shift
 done
 
-if [ ${#DOMAINS[@]} -eq 0 ]; then
-    echo "Usage: sudo ./setup-security.sh --domain <domain> [--domain <domain> ...]"
-    echo "Example: sudo ./setup-security.sh --domain api.example.com --domain member.example.com"
+if [ ${#DOMAINS[@]} -eq 0 ] && [ ${#STATIC_DOMAINS[@]} -eq 0 ]; then
+    echo "Usage: sudo ./setup-security.sh --domain <domain> [--static-domain <domain> ...]"
+    echo "Example: sudo ./setup-security.sh --domain api.example.com --static-domain beta.example.com"
     echo ""
     echo "This will configure security for all specified domains."
     exit 1
@@ -59,7 +72,7 @@ fi
 
 # Check if running as root
 if [ "$EUID" -ne 0 ]; then
-    echo "Please run with sudo: sudo ./setup-security.sh --domain <domain> [--domain <domain> ...]"
+    echo "Please run with sudo: sudo ./setup-security.sh --domain <domain> [--static-domain <domain> ...]"
     exit 1
 fi
 
@@ -71,7 +84,8 @@ fi
 
 source "$CONFIG_FILE"
 
-echo "==> Setting up security measures for ${DOMAINS[*]}..."
+ALL_DOMAINS=("${DOMAINS[@]}" "${STATIC_DOMAINS[@]}")
+echo "==> Setting up security measures for ${ALL_DOMAINS[*]}..."
 echo "    Config: $CONFIG_FILE"
 echo ""
 
@@ -215,9 +229,63 @@ EOF
     echo "    Rate limiting applied to $site_domain -> localhost:$port"
 }
 
+# Function to apply rate limiting to a static site
+apply_rate_limiting_static() {
+    local site_domain="$1"
+    local nginx_site="/etc/nginx/sites-available/$site_domain"
+    local web_root="/var/www/$site_domain"
+
+    if [ ! -f "$nginx_site" ]; then
+        echo "    Site config not found: $nginx_site (skipping)"
+        return
+    fi
+
+    # Check if rate limiting is already configured
+    if grep -q "limit_req zone" "$nginx_site"; then
+        echo "    Rate limiting already configured for $site_domain"
+        return
+    fi
+
+    echo "    Adding rate limiting to static site $site_domain..."
+
+    cat > "$nginx_site" << EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $site_domain;
+
+    root $web_root;
+    index index.html;
+
+    # Allow certbot challenge
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    # General rate limiting
+    location / {
+        limit_req zone=general_limit burst=${NGINX_GENERAL_BURST} nodelay;
+        limit_conn conn_limit ${NGINX_GENERAL_CONN_LIMIT};
+
+        try_files \$uri \$uri/ /index.html;
+    }
+
+    # Increase max body size
+    client_max_body_size ${NGINX_CLIENT_MAX_BODY_SIZE};
+}
+EOF
+
+    echo "    Rate limiting applied to static site $site_domain"
+}
+
 # Apply rate limiting to all specified domains
 for SITE_DOMAIN in "${DOMAINS[@]}"; do
     apply_rate_limiting "$SITE_DOMAIN"
+done
+
+# Apply rate limiting to static domains
+for SITE_DOMAIN in "${STATIC_DOMAINS[@]}"; do
+    apply_rate_limiting_static "$SITE_DOMAIN"
 done
 
 # Test and reload nginx if any changes were made
@@ -337,7 +405,8 @@ echo "=========================================="
 echo "Security Setup Complete!"
 echo "=========================================="
 echo ""
-echo "Domains: ${DOMAINS[*]}"
+echo "API Domains: ${DOMAINS[*]}"
+echo "Static Domains: ${STATIC_DOMAINS[*]}"
 echo "Config: $CONFIG_FILE"
 echo ""
 echo "1. UFW Firewall:"
@@ -348,7 +417,7 @@ echo "2. Nginx Rate Limiting:"
 echo "   - Auth endpoints: $NGINX_RATE_AUTH (burst=$NGINX_AUTH_BURST)"
 echo "   - API endpoints: $NGINX_RATE_API (burst=$NGINX_API_BURST)"
 echo "   - General: $NGINX_RATE_GENERAL (burst=$NGINX_GENERAL_BURST)"
-echo "   - Applied to: ${DOMAINS[*]}"
+echo "   - Applied to: ${ALL_DOMAINS[*]}"
 echo ""
 echo "3. Fail2ban:"
 echo "   - Rate limit violations: bantime=${F2B_LIMIT_REQ_BANTIME}s, maxretry=${F2B_LIMIT_REQ_MAXRETRY}"
