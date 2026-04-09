@@ -319,12 +319,12 @@ check_jail() {
 
         # Check jail.local override first
         if [ -f "$jail_local" ]; then
-            value=$(awk "/^\\[${jail}\\]/,/^\\[/" "$jail_local" | grep "^[[:space:]]*${key}" | sed 's/.*=[[:space:]]*//' | tr -d '[:space:]')
+            value=$(sed -n "/^\\[${jail}\\]/,/^\\[/{/^\\[/d;p}" "$jail_local" | grep "^[[:space:]]*${key}" | sed 's/.*=[[:space:]]*//' | tr -d '[:space:]')
         fi
 
         # Fall back to jail.d/nginx.conf
         if [ -z "$value" ] && [ -f "$F2B_CONF" ]; then
-            value=$(awk "/^\\[${jail}\\]/,/^\\[/" "$F2B_CONF" | grep "^[[:space:]]*${key}" | sed 's/.*=[[:space:]]*//' | tr -d '[:space:]')
+            value=$(sed -n "/^\\[${jail}\\]/,/^\\[/{/^\\[/d;p;}" "$F2B_CONF" | grep "^[[:space:]]*${key}" | sed 's/.*=[[:space:]]*//' | tr -d '[:space:]')
         fi
 
         echo "$value"
@@ -376,10 +376,10 @@ if [ -f "$F2B_CONF" ]; then
         local value=""
         local jail_local="/etc/fail2ban/jail.local"
         if [ -f "$jail_local" ]; then
-            value=$(awk "/^\\[${jail}\\]/,/^\\[/" "$jail_local" | grep "^[[:space:]]*${key}" | sed 's/.*=[[:space:]]*//' | tr -d '[:space:]')
+            value=$(sed -n "/^\\[${jail}\\]/,/^\\[/{/^\\[/d;p}" "$jail_local" | grep "^[[:space:]]*${key}" | sed 's/.*=[[:space:]]*//' | tr -d '[:space:]')
         fi
         if [ -z "$value" ] && [ -f "$F2B_CONF" ]; then
-            value=$(awk "/^\\[${jail}\\]/,/^\\[/" "$F2B_CONF" | grep "^[[:space:]]*${key}" | sed 's/.*=[[:space:]]*//' | tr -d '[:space:]')
+            value=$(sed -n "/^\\[${jail}\\]/,/^\\[/{/^\\[/d;p;}" "$F2B_CONF" | grep "^[[:space:]]*${key}" | sed 's/.*=[[:space:]]*//' | tr -d '[:space:]')
         fi
         echo "$value"
     }
