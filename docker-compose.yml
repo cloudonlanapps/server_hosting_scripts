@@ -21,7 +21,7 @@ services:
       context: .
       args:
         GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-        REPO_BRANCH: ${REPO_BRANCH:-main}
+        REPO_BRANCH: ${REPO_BRANCH:-}
         GIT_URL: ${GIT_URL}
     container_name: ${COMPOSE_PROJECT_NAME}-server
     restart: unless-stopped

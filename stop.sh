@@ -4,18 +4,17 @@ set -e
 # Usage: ./stop.sh --project NAME [options]
 #
 # Required:
-#   --project NAME      Project name (e.g., myproduct)
+#   --project NAME          Project name (e.g., myproduct)
 #
-# Environment modes:
-#   --prod              Stop production containers
-#   --dev               Stop development containers
-#   --all               Stop all environments (beta, prod, dev)
-#   (default)           Stop beta containers
+# Options:
+#   --git-branch BRANCH     Git branch (required in server mode, not used in dev mode)
+#   --dev                   Stop development containers
 #
 # Stops containers cleanly without removing data volumes.
 
 PROJECT_NAME=""
-STOP_ENV="beta"  # Default to beta for safety
+DEV_MODE=false
+GIT_BRANCH=""
 
 # Parse arguments
 while [ $# -gt 0 ]; do
@@ -24,13 +23,16 @@ while [ $# -gt 0 ]; do
             echo "Usage: ./stop.sh --project NAME [options]"
             echo ""
             echo "Required:"
-            echo "  --project NAME      Project name (e.g., myproduct)"
+            echo "  --project NAME          Project name (e.g., myproduct)"
             echo ""
-            echo "Environment modes:"
-            echo "  --prod              Stop production containers"
-            echo "  --dev               Stop development containers"
-            echo "  --all               Stop all environments (beta, prod, dev)"
-            echo "  (default)           Stop beta containers"
+            echo "Options:"
+            echo "  --git-branch BRANCH     Git branch (required in server mode, not used in dev mode)"
+            echo "  --dev                   Stop development containers"
+            echo ""
+            echo "Examples:"
+            echo "  ./stop.sh --project myproduct                          # stops main (default)"
+            echo "  ./stop.sh --project myproduct --git-branch release     # stops release"
+            echo "  ./stop.sh --project myproduct --dev                    # stops dev"
             echo ""
             echo "Stops containers cleanly without removing data volumes."
             exit 0
@@ -42,14 +44,15 @@ while [ $# -gt 0 ]; do
         --project=*)
             PROJECT_NAME="${1#*=}"
             ;;
-        --prod)
-            STOP_ENV="prod"
-            ;;
         --dev)
-            STOP_ENV="dev"
+            DEV_MODE=true
             ;;
-        --all)
-            STOP_ENV="all"
+        --git-branch)
+            shift
+            GIT_BRANCH="$1"
+            ;;
+        --git-branch=*)
+            GIT_BRANCH="${1#*=}"
             ;;
     esac
     shift
@@ -61,50 +64,39 @@ if [ -z "$PROJECT_NAME" ]; then
     exit 1
 fi
 
-# Function to stop a specific environment
-stop_environment() {
-    local env_name="$1"
-    local project_name="$2"
+# Server mode requires --git-branch
+if [ "$DEV_MODE" = false ] && [ -z "$GIT_BRANCH" ]; then
+    echo "ERROR: --git-branch is required in server mode (e.g., --git-branch main, --git-branch release)"
+    echo "  Use --dev for development mode"
+    exit 1
+fi
 
-    echo "==> Stopping $env_name containers ($project_name)..."
+# Determine compose project name
+if [ "$DEV_MODE" = true ]; then
+    COMPOSE_PROJECT_NAME="${PROJECT_NAME}-dev"
+else
+    COMPOSE_PROJECT_NAME="${PROJECT_NAME}-${GIT_BRANCH}"
+fi
 
-    # Set placeholder values for environment variables referenced in docker-compose.yml
-    # These are not used during 'down' but are required to parse the compose file
-    export PROJECT_NAME='placeholder'
-    export GIT_URL='placeholder'
-    export POSTGRES_DB='placeholder'
-    export POSTGRES_USER='placeholder'
-    export POSTGRES_PASSWORD='placeholder'
-    export SECRET_KEY='placeholder'
-    export BOOTSTRAP_PASSWORD='placeholder'
-    export DATA_DIR='/tmp'
-    export SERVER_PORT='8000:8000'
-    export COMPOSE_PROJECT_NAME="$project_name"
-    export CORS_ALLOWED_ORIGINS=''
-    export ENVIRONMENT='production'
+echo "==> Stopping containers ($COMPOSE_PROJECT_NAME)..."
 
-    docker compose -p "$project_name" down 2>/dev/null || true
-    echo "    $env_name stopped"
-}
+# Set placeholder values for environment variables referenced in docker-compose.yml
+# These are not used during 'down' but are required to parse the compose file
+export PROJECT_NAME='placeholder'
+export GIT_URL='placeholder'
+export POSTGRES_DB='placeholder'
+export POSTGRES_USER='placeholder'
+export POSTGRES_PASSWORD='placeholder'
+export SECRET_KEY='placeholder'
+export BOOTSTRAP_PASSWORD='placeholder'
+export DATA_DIR='/tmp'
+export SERVER_PORT='8000:8000'
+export COMPOSE_PROJECT_NAME
+export CORS_ALLOWED_ORIGINS=''
+export ENVIRONMENT='production'
 
-case $STOP_ENV in
-    prod)
-        stop_environment "PRODUCTION" "${PROJECT_NAME}-prod"
-        ;;
-    dev)
-        stop_environment "DEVELOPMENT" "${PROJECT_NAME}-dev"
-        ;;
-    all)
-        stop_environment "BETA" "${PROJECT_NAME}-beta"
-        stop_environment "PRODUCTION" "${PROJECT_NAME}-prod"
-        stop_environment "DEVELOPMENT" "${PROJECT_NAME}-dev"
-        ;;
-    beta|*)
-        stop_environment "BETA" "${PROJECT_NAME}-beta"
-        ;;
-esac
+docker compose -p "$COMPOSE_PROJECT_NAME" down 2>/dev/null || true
 
-echo ""
 echo "==> Containers stopped"
 echo ""
 echo "Running containers:"

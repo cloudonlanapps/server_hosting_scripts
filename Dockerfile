@@ -21,19 +21,21 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # Clone source from GitHub using HTTPS
 # For private repos, pass GITHUB_TOKEN build arg
 ARG GITHUB_TOKEN=
-ARG REPO_BRANCH=main
+ARG REPO_BRANCH=
 ARG GIT_URL
 RUN if [ -z "$GIT_URL" ]; then \
         echo "ERROR: GIT_URL build arg is required"; \
         exit 1; \
     fi; \
+    BRANCH_FLAG=""; \
+    if [ -n "$REPO_BRANCH" ]; then \
+        BRANCH_FLAG="--branch ${REPO_BRANCH} --single-branch"; \
+    fi; \
     if [ -n "$GITHUB_TOKEN" ]; then \
         GIT_URL_WITH_TOKEN=$(echo "$GIT_URL" | sed "s|https://|https://${GITHUB_TOKEN}@|"); \
-        git clone --branch ${REPO_BRANCH} --single-branch \
-            "$GIT_URL_WITH_TOKEN" /app; \
+        git clone $BRANCH_FLAG "$GIT_URL_WITH_TOKEN" /app; \
     else \
-        git clone --branch ${REPO_BRANCH} --single-branch \
-            "$GIT_URL" /app 2>/tmp/clone_err \
+        git clone $BRANCH_FLAG "$GIT_URL" /app 2>/tmp/clone_err \
         || { echo ""; \
              echo "ERROR: Failed to clone repository without a token."; \
              echo "The repo may be private. Re-run with --github-token <TOKEN>"; \

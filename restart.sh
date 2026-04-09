@@ -12,10 +12,9 @@ set -e
 #   --postgres-password PASS    Database password (must match existing database)
 #   --secret-key KEY            JWT signing key (changing it invalidates existing user sessions)
 #
-# Environment modes (mutually exclusive):
-#   --beta              Restart beta containers [default]
-#   --prod              Restart production containers
-#   --dev               Restart development containers
+# Options:
+#   --git-branch BRANCH         Git branch (required in server mode, not used in dev mode). Used to locate the deployment config.
+#   --dev                       Restart development containers
 
 show_usage() {
     echo "Usage: ./restart.sh --project NAME --bootstrap-password PASS --postgres-password PASS --secret-key KEY [options]"
@@ -29,14 +28,18 @@ show_usage() {
     echo "  --postgres-password PASS    Database password (must match existing database)"
     echo "  --secret-key KEY            JWT signing key (changing it invalidates existing user sessions)"
     echo ""
-    echo "Environment modes (mutually exclusive):"
-    echo "  --beta              Restart beta containers [default]"
-    echo "  --prod              Restart production containers"
-    echo "  --dev               Restart development containers"
+    echo "Options:"
+    echo "  --git-branch BRANCH         Git branch (required in server mode, not used in dev mode). Used to locate the deployment config."
+    echo "  --dev                       Restart development containers"
     echo ""
     echo "Examples:"
-    echo "  ./restart.sh --project myproduct --bootstrap-password pass123 --postgres-password dbpass123 --secret-key KEY --beta"
-    echo "  ./restart.sh --project myproduct --bootstrap-password pass123 --postgres-password dbpass123 --secret-key KEY --prod"
+    echo "  # Restart main branch (default):"
+    echo "  ./restart.sh --project myproduct --bootstrap-password pass123 --postgres-password dbpass123 --secret-key KEY"
+    echo ""
+    echo "  # Restart release branch:"
+    echo "  ./restart.sh --project myproduct --bootstrap-password pass123 --postgres-password dbpass123 --secret-key KEY --git-branch release"
+    echo ""
+    echo "  # Restart dev:"
     echo "  ./restart.sh --project myproduct --bootstrap-password pass123 --postgres-password dbpass123 --secret-key KEY --dev"
 }
 
@@ -44,7 +47,8 @@ PROJECT_NAME=""
 BOOTSTRAP_PASSWORD=""
 POSTGRES_PASSWORD=""
 SECRET_KEY=""
-DEPLOY_ENV="beta"  # Default to beta for safety
+DEV_MODE=false
+GIT_BRANCH=""
 
 # Parse arguments
 while [ $# -gt 0 ]; do
@@ -81,14 +85,15 @@ while [ $# -gt 0 ]; do
         --secret-key=*)
             SECRET_KEY="${1#*=}"
             ;;
-        --beta)
-            DEPLOY_ENV="beta"
-            ;;
-        --prod)
-            DEPLOY_ENV="prod"
-            ;;
         --dev)
-            DEPLOY_ENV="dev"
+            DEV_MODE=true
+            ;;
+        --git-branch)
+            shift
+            GIT_BRANCH="$1"
+            ;;
+        --git-branch=*)
+            GIT_BRANCH="${1#*=}"
             ;;
         *)
             echo "ERROR: Unknown option: $1"
@@ -106,12 +111,24 @@ if [ -z "$PROJECT_NAME" ] || [ -z "$BOOTSTRAP_PASSWORD" ] || [ -z "$POSTGRES_PAS
     exit 1
 fi
 
-# Determine default data directory to find config file
-case $DEPLOY_ENV in
-    prod)   DEFAULT_DATA_DIR="/var/lib/${PROJECT_NAME}-server" ;;
-    dev)    DEFAULT_DATA_DIR="./data-${PROJECT_NAME}" ;;
-    beta|*) DEFAULT_DATA_DIR="/var/lib/${PROJECT_NAME}-server-beta" ;;
-esac
+# Server mode requires --git-branch
+if [ "$DEV_MODE" = false ] && [ -z "$GIT_BRANCH" ]; then
+    echo "ERROR: --git-branch is required in server mode (e.g., --git-branch main, --git-branch release)"
+    echo "  Use --dev for development mode"
+    exit 1
+fi
+
+# Determine data directory to find config file
+DATA_BASE="${HOME}/.local/share"
+if [ "$DEV_MODE" = true ]; then
+    if [ -n "$GIT_BRANCH" ]; then
+        DEFAULT_DATA_DIR="${DATA_BASE}/server_dev_${PROJECT_NAME}_${GIT_BRANCH}"
+    else
+        DEFAULT_DATA_DIR="${DATA_BASE}/server_dev_${PROJECT_NAME}"
+    fi
+else
+    DEFAULT_DATA_DIR="${DATA_BASE}/server_${PROJECT_NAME}_${GIT_BRANCH}"
+fi
 
 # Load deployment config saved by deploy.sh
 DEPLOY_CONFIG="$DEFAULT_DATA_DIR/.deploy.env"
@@ -125,16 +142,16 @@ echo "==> Loading deployment config from $DEPLOY_CONFIG..."
 source "$DEPLOY_CONFIG"
 
 # Build CORS origins from saved ALLOWED_WEBSITES
-if [ "$DEPLOY_ENV" = "dev" ]; then
+if [ "$DEV_MODE" = true ]; then
     CORS_ALLOWED_ORIGINS="*"
 else
     CORS_ALLOWED_ORIGINS=$(echo "$ALLOWED_WEBSITES" | tr ',' '\n' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' | sed 's|^|https://|' | tr '\n' ',' | sed 's/,$//')
 fi
 
-echo "==> Restarting $(echo "$DEPLOY_ENV" | tr '[:lower:]' '[:upper:]') environment"
+echo "==> Restarting: branch=$GIT_BRANCH, port=$PORT"
 
 # Determine port binding
-if [ "$DEPLOY_ENV" = "dev" ]; then
+if [ "$DEV_MODE" = true ]; then
     SERVER_PORT="${PORT}:8000"
 else
     SERVER_PORT="127.0.0.1:${PORT}:8000"
@@ -154,8 +171,7 @@ export COMPOSE_PROJECT_NAME
 export CORS_ALLOWED_ORIGINS
 export ENVIRONMENT
 
-echo "==> Environment: $DEPLOY_ENV"
-echo "    Port: $PORT"
+echo "==> Port: $PORT"
 echo "    Data directory: $DATA_DIR"
 echo "    Project name: $COMPOSE_PROJECT_NAME"
 

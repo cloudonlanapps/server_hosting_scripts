@@ -9,18 +9,18 @@ set -e
 #   --bootstrap-password PASS   Password for the bootstrap admin user (can be changed on each run)
 #   --postgres-password PASS    Database password (fixed once created, change only with --reset)
 #
-# Environment modes (mutually exclusive):
-#   --beta              Beta environment (port 8001) [default]
-#   --prod              Deploy to production (port 8000)
-#   --dev               Development mode for macOS (port 8000, all CORS, port exposed)
+# Modes:
+#   --dev               Development mode (all CORS, port exposed externally)
+#   (default)           Server mode: localhost-only binding, requires --allowed-websites
 #
 # Options:
+#   --git-branch BRANCH Git branch to deploy (required in server mode, optional in dev mode)
+#   --port PORT         Host port (default: 8001)
 #   --reset             Drop all tables before starting (fresh database)
 #   --secret-key KEY    JWT signing key (auto-generated if not provided; changing it invalidates existing user sessions)
 #   --github-token TOK  GitHub token for cloning private repo
-#   --data-dir DIR      Custom data directory (default: derived from --project and environment)
-#   --port PORT         Custom port (default: 8001 for beta, 8000 for prod/dev)
-#   --allowed-websites SITES  Domain(s) for CORS, comma-separated (required for --prod and --beta)
+#   --data-dir DIR      Custom data directory (default: ~/.local/share/server_<project>_<branch>)
+#   --allowed-websites SITES  Domain(s) for CORS, comma-separated (required in server mode)
 
 show_usage() {
     echo "Usage: ./deploy.sh --project NAME --git-url URL --bootstrap-password PASS --postgres-password PASS [options]"
@@ -31,35 +31,55 @@ show_usage() {
     echo "  --bootstrap-password PASS   Password for the bootstrap admin user (can be changed on each run)"
     echo "  --postgres-password PASS    Database password (fixed once created, change only with --reset)"
     echo ""
-    echo "Environment modes (mutually exclusive):"
-    echo "  --beta              Beta environment (port 8001) [default]"
-    echo "  --prod              Deploy to production (port 8000)"
-    echo "  --dev               Development mode for macOS (port 8000, all CORS, port exposed)"
+    echo "Modes:"
+    echo "  --dev               Development mode (all CORS, port exposed externally)"
+    echo "  (default)           Server mode: localhost-only binding, requires --allowed-websites"
     echo ""
     echo "Options:"
+    echo "  --git-branch BRANCH Git branch to deploy (required in server mode, optional in dev mode)"
+    echo "  --port PORT         Host port (default: 8001)"
     echo "  --reset             Drop all tables before starting (fresh database)"
     echo "  --secret-key KEY    JWT signing key (auto-generated if not provided; changing it invalidates existing user sessions)"
     echo "  --github-token TOK  GitHub token for cloning private repo"
-    echo "  --data-dir DIR      Custom data directory (default: /var/lib/<project>-server[-beta] or ./data-<project>)"
-    echo "  --port PORT         Custom port (default: 8001 for beta, 8000 for prod/dev)"
-    echo "  --allowed-websites SITES  Domain(s) for CORS, comma-separated (required for --prod and --beta)"
+    echo "  --data-dir DIR      Custom data directory (default: ~/.local/share/server_<project>_<branch>)"
+    echo "  --allowed-websites SITES  Domain(s) for CORS, comma-separated (required in server mode)"
     echo ""
-    echo "Naming convention (given --project myproduct):"
+    echo "Naming convention (given --project myproduct --git-branch release):"
     echo "  Server entry point:  myproduct_server.main:app"
     echo "  Bootstrap command:   myproduct_bootstrap"
     echo "  DB name & user:      myproduct"
-    echo "  Data dir (prod):     /var/lib/myproduct-server"
-    echo "  Data dir (beta):     /var/lib/myproduct-server-beta"
-    echo "  Data dir (dev):      ./data-myproduct"
-    echo "  Containers:          myproduct-prod-server, myproduct-beta-postgres, etc."
+    echo "  Data dir (server):   ~/.local/share/server_myproduct_release"
+    echo "  Data dir (dev):      ~/.local/share/server_dev_myproduct"
+    echo "  Data dir (dev+branch): ~/.local/share/server_dev_myproduct_feature"
+    echo "  Containers:          myproduct-release-server, myproduct-release-postgres, etc."
     echo ""
     echo "Examples:"
+    echo "  # Server mode — branch=main, default port 8001:"
     echo "  ./deploy.sh --project myproduct --git-url https://github.com/org/myproduct_server.git \\"
-    echo "    --bootstrap-password pass123 --postgres-password dbpass123 --allowed-websites beta.example.com"
+    echo "    --bootstrap-password pass123 --postgres-password dbpass123 \\"
+    echo "    --git-branch main --allowed-websites beta.example.com"
+    echo ""
+    echo "  # Server mode — branch=release, port 8000:"
     echo "  ./deploy.sh --project myproduct --git-url https://github.com/org/myproduct_server.git \\"
-    echo "    --bootstrap-password pass123 --postgres-password dbpass123 --allowed-websites www.example.com,example.com --prod"
+    echo "    --bootstrap-password pass123 --postgres-password dbpass123 \\"
+    echo "    --git-branch release --port 8000 --allowed-websites www.example.com,example.com"
+    echo ""
+    echo "  # Dev mode — clones repo's default branch:"
     echo "  ./deploy.sh --project myproduct --git-url https://github.com/org/myproduct_server.git \\"
     echo "    --bootstrap-password pass123 --postgres-password dbpass123 --dev"
+    echo ""
+    echo "  # Dev mode — specific branch for debugging:"
+    echo "  ./deploy.sh --project myproduct --git-url https://github.com/org/myproduct_server.git \\"
+    echo "    --bootstrap-password pass123 --postgres-password dbpass123 --dev --git-branch fix/login-bug"
+    echo ""
+    echo "Prerequisites:"
+    echo "  - Docker installed and running"
+    echo "  - Current user in the 'docker' group (to run docker without sudo)"
+    echo "    Check: groups | grep docker"
+    echo "    Fix:   sudo usermod -aG docker \$USER && newgrp docker"
+    echo ""
+    echo "Data is stored in ~/.local/share/ — no sudo required."
+    echo "Back up ~/.local/share/server_<project>_*/ to preserve all deployment data."
 }
 
 PROJECT_NAME=""
@@ -69,7 +89,8 @@ POSTGRES_PASSWORD=""
 SECRET_KEY=""
 GITHUB_TOKEN=""
 RESET_DB=false
-DEPLOY_ENV="beta"  # Default to beta for safety
+DEV_MODE=false
+GIT_BRANCH=""
 CUSTOM_DATA_DIR=""
 CUSTOM_PORT=""
 ALLOWED_WEBSITES=""
@@ -126,14 +147,15 @@ while [ $# -gt 0 ]; do
         --github-token=*)
             GITHUB_TOKEN="${1#*=}"
             ;;
-        --beta)
-            DEPLOY_ENV="beta"
-            ;;
-        --prod)
-            DEPLOY_ENV="prod"
-            ;;
         --dev)
-            DEPLOY_ENV="dev"
+            DEV_MODE=true
+            ;;
+        --git-branch)
+            shift
+            GIT_BRANCH="$1"
+            ;;
+        --git-branch=*)
+            GIT_BRANCH="${1#*=}"
             ;;
         --data-dir)
             shift
@@ -165,6 +187,18 @@ while [ $# -gt 0 ]; do
     shift
 done
 
+# Check prerequisites
+if ! command -v docker &> /dev/null; then
+    echo "ERROR: Docker is not installed. Install Docker first."
+    exit 1
+fi
+if ! docker info &> /dev/null; then
+    echo "ERROR: Cannot connect to Docker. Is the Docker daemon running?"
+    echo "  If your user is not in the 'docker' group, run:"
+    echo "    sudo usermod -aG docker \$USER && newgrp docker"
+    exit 1
+fi
+
 # Validate required arguments
 if [ -z "$PROJECT_NAME" ] || [ -z "$GIT_URL" ] || [ -z "$BOOTSTRAP_PASSWORD" ] || [ -z "$POSTGRES_PASSWORD" ]; then
     echo "ERROR: --project, --git-url, --bootstrap-password, and --postgres-password are required"
@@ -172,12 +206,20 @@ if [ -z "$PROJECT_NAME" ] || [ -z "$GIT_URL" ] || [ -z "$BOOTSTRAP_PASSWORD" ] |
     exit 1
 fi
 
-# Validate --allowed-websites is provided for non-dev environments
-if [ "$DEPLOY_ENV" != "dev" ] && [ -z "$ALLOWED_WEBSITES" ]; then
-    echo "ERROR: --allowed-websites is required for --prod and --beta environments"
-    echo "  e.g., --allowed-websites beta.example.com or --allowed-websites www.example.com,example.com"
-    exit 1
+# Server mode requires --git-branch and --allowed-websites
+if [ "$DEV_MODE" = false ]; then
+    if [ -z "$GIT_BRANCH" ]; then
+        echo "ERROR: --git-branch is required in server mode (e.g., --git-branch main, --git-branch release)"
+        echo "  Use --dev for development mode (clones repo's default branch)"
+        exit 1
+    fi
+    if [ -z "$ALLOWED_WEBSITES" ]; then
+        echo "ERROR: --allowed-websites is required in server mode"
+        echo "  e.g., --allowed-websites beta.example.com or --allowed-websites www.example.com,example.com"
+        exit 1
+    fi
 fi
+
 
 # Validate password lengths
 if [ ${#BOOTSTRAP_PASSWORD} -lt 6 ]; then
@@ -197,36 +239,32 @@ if [ -z "$SECRET_KEY" ]; then
     echo "    $SECRET_KEY"
 fi
 
+# Data directory base
+DATA_BASE="${HOME}/.local/share"
+
 # Set environment-specific defaults
-case $DEPLOY_ENV in
-    prod)
-        DEFAULT_PORT=8000
-        DEFAULT_DATA_DIR="/var/lib/${PROJECT_NAME}-server"
-        COMPOSE_PROJECT_NAME="${PROJECT_NAME}-prod"
-        ENVIRONMENT="production"
-        REPO_BRANCH="release"
-        echo "==> Deploying to PRODUCTION environment (branch: release)"
-        ;;
-    dev)
-        DEFAULT_PORT=8000
-        DEFAULT_DATA_DIR="./data-${PROJECT_NAME}"
-        COMPOSE_PROJECT_NAME="${PROJECT_NAME}-dev"
-        ENVIRONMENT="development"
-        REPO_BRANCH="main"
-        echo "==> Deploying to DEVELOPMENT environment (branch: main)"
-        ;;
-    beta|*)
-        DEFAULT_PORT=8001
-        DEFAULT_DATA_DIR="/var/lib/${PROJECT_NAME}-server-beta"
-        COMPOSE_PROJECT_NAME="${PROJECT_NAME}-beta"
-        ENVIRONMENT="production"  # Beta runs in production mode but with beta CORS
-        REPO_BRANCH="main"
-        echo "==> Deploying to BETA environment (branch: main)"
-        ;;
-esac
+if [ "$DEV_MODE" = true ]; then
+    DEFAULT_PORT=8001
+    if [ -n "$GIT_BRANCH" ]; then
+        DEFAULT_DATA_DIR="${DATA_BASE}/server_dev_${PROJECT_NAME}_${GIT_BRANCH}"
+    else
+        DEFAULT_DATA_DIR="${DATA_BASE}/server_dev_${PROJECT_NAME}"
+    fi
+    COMPOSE_PROJECT_NAME="${PROJECT_NAME}-dev"
+    ENVIRONMENT="development"
+    REPO_BRANCH="$GIT_BRANCH"
+    echo "==> Deploying to DEVELOPMENT mode (branch: ${GIT_BRANCH:-repo default})"
+else
+    DEFAULT_PORT=8001
+    DEFAULT_DATA_DIR="${DATA_BASE}/server_${PROJECT_NAME}_${GIT_BRANCH}"
+    COMPOSE_PROJECT_NAME="${PROJECT_NAME}-${GIT_BRANCH}"
+    ENVIRONMENT="production"
+    REPO_BRANCH="$GIT_BRANCH"
+    echo "==> Deploying branch: $GIT_BRANCH"
+fi
 
 # Build CORS origins from --allowed-websites
-if [ "$DEPLOY_ENV" = "dev" ]; then
+if [ "$DEV_MODE" = true ]; then
     CORS_ALLOWED_ORIGINS="*"
 else
     # Convert comma-separated domains to https:// prefixed origins
@@ -243,33 +281,25 @@ POSTGRES_USER="$PROJECT_NAME"
 
 echo "==> Project: $PROJECT_NAME"
 echo "    Git URL: $GIT_URL"
-echo "    Environment: $DEPLOY_ENV"
-echo "    Branch: $REPO_BRANCH"
+echo "    Branch: ${REPO_BRANCH:-repo default}"
 echo "    Port: $PORT"
 echo "    Data directory: $DATA_DIR"
 echo "    CORS origins: $CORS_ALLOWED_ORIGINS"
 echo "    Compose project: $COMPOSE_PROJECT_NAME"
 
 echo "==> Creating data directories..."
-if [ "$DEPLOY_ENV" = "dev" ]; then
-    mkdir -p "$DATA_DIR/db"
-    mkdir -p "$DATA_DIR/uploads"
-    mkdir -p "$DATA_DIR/static"
-else
-    sudo mkdir -p "$DATA_DIR/db"
-    sudo mkdir -p "$DATA_DIR/uploads"
-    sudo mkdir -p "$DATA_DIR/static"
-    sudo chown -R $(id -u):$(id -g) "$DATA_DIR"
-fi
+mkdir -p "$DATA_DIR/db"
+mkdir -p "$DATA_DIR/uploads"
+mkdir -p "$DATA_DIR/static"
 
 # Save deployment config (non-secret settings only)
 DEPLOY_CONFIG="$DATA_DIR/.deploy.env"
 echo "==> Saving deployment config to $DEPLOY_CONFIG..."
-if [ "$DEPLOY_ENV" = "dev" ]; then
-    cat > "$DEPLOY_CONFIG" << EOF
+cat > "$DEPLOY_CONFIG" << EOF
 PROJECT_NAME=$PROJECT_NAME
 GIT_URL=$GIT_URL
-DEPLOY_ENV=$DEPLOY_ENV
+DEV_MODE=$DEV_MODE
+GIT_BRANCH=$GIT_BRANCH
 PORT=$PORT
 DATA_DIR=$DATA_DIR
 COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME
@@ -277,26 +307,12 @@ ENVIRONMENT=$ENVIRONMENT
 REPO_BRANCH=$REPO_BRANCH
 ALLOWED_WEBSITES=$ALLOWED_WEBSITES
 EOF
-else
-    sudo tee "$DEPLOY_CONFIG" > /dev/null << EOF
-PROJECT_NAME=$PROJECT_NAME
-GIT_URL=$GIT_URL
-DEPLOY_ENV=$DEPLOY_ENV
-PORT=$PORT
-DATA_DIR=$DATA_DIR
-COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME
-ENVIRONMENT=$ENVIRONMENT
-REPO_BRANCH=$REPO_BRANCH
-ALLOWED_WEBSITES=$ALLOWED_WEBSITES
-EOF
-    sudo chown $(id -u):$(id -g) "$DEPLOY_CONFIG"
-fi
 chmod 600 "$DEPLOY_CONFIG"
 
 echo "==> Setting up environment..."
 
 # Determine port binding
-if [ "$DEPLOY_ENV" = "dev" ]; then
+if [ "$DEV_MODE" = true ]; then
     SERVER_PORT="${PORT}:8000"
     echo "    Dev mode: Server exposed on port $PORT"
 else
@@ -326,13 +342,8 @@ docker compose -p "$COMPOSE_PROJECT_NAME" down 2>/dev/null || true
 
 if [ "$RESET_DB" = true ]; then
     echo "==> Removing database data (--reset)..."
-    if [ "$DEPLOY_ENV" = "dev" ]; then
-        rm -rf "$DATA_DIR/db"/*
-        rm -rf "$DATA_DIR/db"/.*  2>/dev/null || true
-    else
-        sudo rm -rf "$DATA_DIR/db"/*
-        sudo rm -rf "$DATA_DIR/db"/.* 2>/dev/null || true
-    fi
+    rm -rf "$DATA_DIR/db"/*
+    rm -rf "$DATA_DIR/db"/.* 2>/dev/null || true
     echo "    Database data cleared from $DATA_DIR/db"
 fi
 
@@ -403,11 +414,11 @@ fi
 echo ""
 echo "==> Deployment complete!"
 echo ""
-echo "Environment: $DEPLOY_ENV (branch: $REPO_BRANCH)"
+echo "Branch: $REPO_BRANCH | Port: $PORT"
 echo "Services:"
 docker compose -p "$COMPOSE_PROJECT_NAME" ps
 echo ""
-if [ "$DEPLOY_ENV" = "dev" ]; then
+if [ "$DEV_MODE" = true ]; then
     echo "Server accessible at: http://localhost:$PORT"
     echo "Health check: curl http://localhost:$PORT/health"
 else
