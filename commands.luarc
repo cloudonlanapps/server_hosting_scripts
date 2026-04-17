@@ -1,0 +1,4 @@
+return {
+  { "Deploy > Production", "./deploy-env.sh prod" },
+  { "Deploy > Beta",       "./deploy-env.sh beta" },
+}

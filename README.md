@@ -65,6 +65,92 @@ Your repo should have a branch for each instance you want to run (e.g., `main` f
   ```
 - **git** (used inside the Docker build to clone your repo)
 - For private repos: a GitHub token with read access
+- **pass** (password manager) for secrets — see [Secrets Management](#secrets-management-with-pass) below
+
+## Secrets Management with pass
+
+`deploy-env.sh` retrieves secrets from [pass](https://www.passwordstore.org/), the standard Unix password manager. Secrets are GPG-encrypted at rest and decrypted only when needed.
+
+### 1. Install pass and GPG
+
+```bash
+# macOS
+brew install pass gnupg pinentry-mac
+
+# Linux (Debian/Ubuntu)
+sudo apt install pass gnupg
+```
+
+### 2. Create a GPG key (skip if you already have one)
+
+```bash
+gpg --gen-key
+# Enter your name and email. Remember the passphrase.
+
+# Note your key ID:
+gpg --list-keys --keyid-format short
+# Look for the 8-character hex ID after "rsa" (e.g., AB12CD34)
+```
+
+### 3. Initialize the pass store
+
+```bash
+pass init <your-gpg-key-id>
+# e.g., pass init AB12CD34
+```
+
+### 4. Insert the required secrets
+
+```bash
+# Shared
+pass insert club/github-token
+
+# Production
+pass insert club/prod/bootstrap-password
+pass insert club/prod/postgres-password
+pass insert club/prod/secret-key
+
+# Beta
+pass insert club/beta/bootstrap-password
+pass insert club/beta/postgres-password
+pass insert club/beta/secret-key
+```
+
+Each command prompts you to type the secret value (not echoed to screen).
+
+### 5. Verify
+
+```bash
+pass ls club/
+# Should show:
+# club
+# ├── github-token
+# ├── beta
+# │   ├── bootstrap-password
+# │   ├── postgres-password
+# │   └── secret-key
+# └── prod
+#     ├── bootstrap-password
+#     ├── postgres-password
+#     └── secret-key
+
+# Test retrieval:
+pass show club/github-token
+```
+
+### Deploy via commands.luarc (neovim)
+
+Open neovim in this directory, press `Space r`, and select:
+- **Deploy > Production** — deploys `release` branch on port 9000
+- **Deploy > Beta** — deploys `main` branch on port 9001
+
+Or run directly:
+```bash
+./deploy-env.sh prod
+./deploy-env.sh beta
+```
+
+If `pass` is not installed or any secret is missing, the script aborts with a clear error showing which keys need to be added.
 
 ## Quick Start
 
