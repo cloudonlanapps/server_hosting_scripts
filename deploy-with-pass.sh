@@ -9,10 +9,13 @@ set -e
 # Conf file (sourced as bash) must define:
 #   PROJECT              Project name (passed to deploy.sh --project)
 #   GIT_URL              Git repository URL
-#   ENVS                 Bash array of allowed env names, e.g. ENVS=(prod beta)
-#   <env>_GIT_BRANCH     Branch to deploy for each env in ENVS
-#   <env>_PORT           Host port for each env
-#   <env>_ALLOWED_WEBSITES   Comma-separated CORS domains for each env
+#   ENVS                 Bash array of allowed env names, e.g. ENVS=(prod beta dev)
+#   <env>_GIT_BRANCH     Branch to deploy (required for non-dev envs; optional for dev)
+#   <env>_PORT           Host port (required for non-dev envs; optional for dev, deploy.sh defaults to 8001)
+#   <env>_ALLOWED_WEBSITES   CORS domains, comma-separated (required for non-dev envs; optional for dev, defaults to CORS=*)
+#
+# The env name "dev" is treated specially: --dev is passed to deploy.sh and
+# all per-env settings become optional.
 #
 # Optional:
 #   PASS_PREFIX          Pass key prefix (default: $PROJECT)
@@ -73,14 +76,19 @@ GIT_BRANCH="${!GIT_BRANCH_VAR}"
 PORT="${!PORT_VAR}"
 ALLOWED_WEBSITES="${!ALLOWED_WEBSITES_VAR}"
 
-for pair in "${GIT_BRANCH_VAR}:${GIT_BRANCH}" "${PORT_VAR}:${PORT}" "${ALLOWED_WEBSITES_VAR}:${ALLOWED_WEBSITES}"; do
-    name="${pair%%:*}"
-    val="${pair#*:}"
-    if [ -z "$val" ]; then
-        echo "ERROR: $CONF_FILE must define $name"
-        exit 1
-    fi
-done
+# In dev mode all per-env settings are optional (deploy.sh defaults port to
+# 8001 and CORS to "*"). In server mode, branch / port / allowed_websites
+# are all required.
+if [ "$ENV" != "dev" ]; then
+    for pair in "${GIT_BRANCH_VAR}:${GIT_BRANCH}" "${PORT_VAR}:${PORT}" "${ALLOWED_WEBSITES_VAR}:${ALLOWED_WEBSITES}"; do
+        name="${pair%%:*}"
+        val="${pair#*:}"
+        if [ -z "$val" ]; then
+            echo "ERROR: $CONF_FILE must define $name"
+            exit 1
+        fi
+    done
+fi
 
 PASS_PREFIX="${PASS_PREFIX:-$PROJECT}"
 
@@ -128,15 +136,20 @@ BOOTSTRAP_PASSWORD=$(pass show "${PASS_PREFIX}/${ENV}/bootstrap-password")
 POSTGRES_PASSWORD=$(pass show "${PASS_PREFIX}/${ENV}/postgres-password")
 SECRET_KEY=$(pass show "${PASS_PREFIX}/${ENV}/secret-key")
 
-echo "==> Deploying ${PROJECT} [${ENV}] (branch: ${GIT_BRANCH}, port: ${PORT})"
+echo "==> Deploying ${PROJECT} [${ENV}] (branch: ${GIT_BRANCH:-repo default}, port: ${PORT:-default})"
 
-exec "$SCRIPT_DIR/deploy.sh" \
-    --project "$PROJECT" \
-    --git-url "$GIT_URL" \
-    --git-branch "$GIT_BRANCH" \
-    --port "$PORT" \
-    --bootstrap-password "$BOOTSTRAP_PASSWORD" \
-    --postgres-password "$POSTGRES_PASSWORD" \
-    --secret-key "$SECRET_KEY" \
-    --github-token "$GITHUB_TOKEN" \
-    --allowed-websites "$ALLOWED_WEBSITES"
+ARGS=(
+    --project "$PROJECT"
+    --git-url "$GIT_URL"
+    --bootstrap-password "$BOOTSTRAP_PASSWORD"
+    --postgres-password "$POSTGRES_PASSWORD"
+    --secret-key "$SECRET_KEY"
+    --github-token "$GITHUB_TOKEN"
+)
+
+[ "$ENV" = "dev" ] && ARGS+=(--dev)
+[ -n "$GIT_BRANCH" ] && ARGS+=(--git-branch "$GIT_BRANCH")
+[ -n "$PORT" ] && ARGS+=(--port "$PORT")
+[ -n "$ALLOWED_WEBSITES" ] && ARGS+=(--allowed-websites "$ALLOWED_WEBSITES")
+
+exec "$SCRIPT_DIR/deploy.sh" "${ARGS[@]}"
