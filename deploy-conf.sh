@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Usage: ./deploy-with-pass.sh <conf-file> <env>
+# Usage: ./deploy-conf.sh <conf-file> <env>
 #
 # Wrapper around deploy.sh that reads secrets from the 'pass' password manager
 # and per-environment settings from a host-specific conf file.

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Usage: ./stop-with-conf.sh <conf-file> <env>
+# Usage: ./stop-conf.sh <conf-file> <env>
 #
 # Wrapper around stop.sh. Reads PROJECT and per-env branch from the host
 # conf file. Does NOT need 'pass' — stop.sh requires no secrets.

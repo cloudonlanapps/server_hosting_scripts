@@ -1,10 +1,10 @@
 #!/bin/bash
 set -e
 
-# Usage: ./restart-with-pass.sh <conf-file> <env>
+# Usage: ./restart-conf.sh <conf-file> <env>
 #
 # Wrapper around restart.sh. Reads secrets from 'pass' and the project name
-# / env mapping from a host conf file (same format as deploy-with-pass.sh).
+# / env mapping from a host conf file (same format as deploy-conf.sh).
 # restart.sh itself reuses the saved .deploy.env, so branch is the only
 # per-env setting needed here (and only in non-dev mode).
 #
