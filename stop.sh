@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# Run from the script's own directory so docker-compose.yml resolves.
+cd "$(dirname "$0")"
+
 # Usage: ./stop.sh --project NAME [options]
 #
 # Required:

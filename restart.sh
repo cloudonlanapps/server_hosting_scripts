@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# Run from the script's own directory so docker-compose.yml resolves.
+cd "$(dirname "$0")"
+
 # Usage: ./restart.sh --project NAME --bootstrap-password PASS --postgres-password PASS --secret-key KEY [options]
 #
 # Reads non-secret deployment config from $DATA_DIR/.deploy.env (saved by deploy.sh).

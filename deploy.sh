@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# Run from the script's own directory so docker-compose.yml resolves.
+cd "$(dirname "$0")"
+
 # Usage: ./deploy.sh --project NAME --git-url URL --bootstrap-password PASS --postgres-password PASS [options]
 #
 # Required:
