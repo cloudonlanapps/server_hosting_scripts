@@ -158,6 +158,81 @@ curl http://localhost:8001/health
 ./deploy.sh ... --reset
 ```
 
+## Optional: conf-driven wrappers
+
+The raw scripts above take every secret and per-env setting on the command line.
+That's flexible but verbose, and it pushes secret handling onto whoever invokes
+them. Three optional wrappers move both concerns into one place:
+
+- **`deploy-conf.sh <conf> <env>`** — wraps `deploy.sh`, reads secrets from
+  [`pass`](https://www.passwordstore.org/), reads per-env settings from a conf file.
+- **`restart-conf.sh <conf> <env>`** — wraps `restart.sh`, same conventions.
+- **`stop-conf.sh <conf> <env>`** — wraps `stop.sh`. **No secrets needed**, so
+  no `pass` dependency.
+
+If you don't want `pass`, ignore these wrappers and call `deploy.sh`/`restart.sh`/
+`stop.sh` directly. The wrappers are opt-in.
+
+### Conf file
+
+A bash-sourced file describing one project and its environments:
+
+```bash
+# myproduct.conf
+PROJECT="myproduct"
+GIT_URL="https://github.com/org/myproduct_server.git"
+
+# Optional. Defaults to $PROJECT.
+# PASS_PREFIX="myproduct"
+
+ENVS=(prod beta dev)
+
+prod_GIT_BRANCH="release"
+prod_PORT="8000"
+prod_ALLOWED_WEBSITES="www.example.com,example.com"
+
+beta_GIT_BRANCH="main"
+beta_PORT="8001"
+beta_ALLOWED_WEBSITES="beta.example.com"
+
+# dev: all settings optional. deploy.sh defaults port to 8001 and CORS to *.
+# dev_GIT_BRANCH=""    # set to debug a specific branch; empty = repo default
+# dev_PORT=""
+# dev_ALLOWED_WEBSITES=""
+```
+
+The env name **`dev` is special**: when used, `--dev` is passed to the
+underlying script and `<env>_GIT_BRANCH` / `<env>_PORT` / `<env>_ALLOWED_WEBSITES`
+become optional. Any other env name is treated as server mode and requires all
+three.
+
+### Pass key layout
+
+For each env, the wrappers expect these `pass` entries (under `$PASS_PREFIX`,
+which defaults to `$PROJECT`):
+
+| Key | Used by |
+|---|---|
+| `<prefix>/github-token` | `deploy-conf.sh` (shared across envs) |
+| `<prefix>/<env>/bootstrap-password` | `deploy-conf.sh`, `restart-conf.sh` |
+| `<prefix>/<env>/postgres-password` | `deploy-conf.sh`, `restart-conf.sh` |
+| `<prefix>/<env>/secret-key` | `deploy-conf.sh`, `restart-conf.sh` |
+
+Add them once with `pass insert <key>`. The wrappers pre-check all required
+keys and print the exact `pass insert` commands for any that are missing.
+
+### Example
+
+```bash
+./deploy-conf.sh  ./myproduct.conf prod    # build + start production
+./restart-conf.sh ./myproduct.conf beta    # quick restart of beta (no rebuild)
+./stop-conf.sh    ./myproduct.conf dev     # stop dev containers
+```
+
+A typical host repo just contains `myproduct.conf` plus a `justfile` (or
+similar) that wires `just deploy <env>` / `just restart <env>` / `just stop <env>`
+to these wrappers, with this repo added as a git submodule.
+
 ## Data Directory Layout
 
 All data lives under `~/.local/share/` — no sudo required:
@@ -188,6 +263,9 @@ Every script supports `--help` for full usage details.
 | `deploy.sh` | Build and deploy a new instance (or redeploy) |
 | `restart.sh` | Restart an existing deployment with saved config |
 | `stop.sh` | Stop containers without removing data |
+| `deploy-conf.sh` | Optional: `deploy.sh` driven by a conf file + `pass` |
+| `restart-conf.sh` | Optional: `restart.sh` driven by a conf file + `pass` |
+| `stop-conf.sh` | Optional: `stop.sh` driven by a conf file (no `pass` needed) |
 | `setup-nginx.sh` | Configure nginx reverse proxy with SSL for a domain |
 | `audit-security.sh` | Check security settings against `security.conf` |
 | `setup-security.sh` | Apply firewall, rate limiting, and fail2ban from `security.conf` |
