@@ -1,0 +1,58 @@
+#!/bin/bash
+set -e
+
+# Usage: ./stop-with-conf.sh <conf-file> <env>
+#
+# Wrapper around stop.sh. Reads PROJECT and per-env branch from the host
+# conf file. Does NOT need 'pass' — stop.sh requires no secrets.
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+if [ $# -ne 2 ]; then
+    echo "Usage: $0 <conf-file> <env>"
+    exit 1
+fi
+
+CONF_FILE="$1"
+ENV="$2"
+
+if [ ! -f "$CONF_FILE" ]; then
+    echo "ERROR: Conf file not found: $CONF_FILE"
+    exit 1
+fi
+
+# shellcheck disable=SC1090
+source "$CONF_FILE"
+
+if [ -z "$PROJECT" ]; then
+    echo "ERROR: $CONF_FILE must define PROJECT"
+    exit 1
+fi
+
+if [ -z "${ENVS+x}" ] || [ ${#ENVS[@]} -eq 0 ]; then
+    echo "ERROR: $CONF_FILE must define ENVS=(...) with at least one entry"
+    exit 1
+fi
+
+ENV_OK=false
+for e in "${ENVS[@]}"; do
+    [ "$e" = "$ENV" ] && ENV_OK=true && break
+done
+if [ "$ENV_OK" = false ]; then
+    echo "ERROR: Unknown env '$ENV'. Allowed: ${ENVS[*]}"
+    exit 1
+fi
+
+GIT_BRANCH_VAR="${ENV}_GIT_BRANCH"
+GIT_BRANCH="${!GIT_BRANCH_VAR}"
+
+if [ "$ENV" != "dev" ] && [ -z "$GIT_BRANCH" ]; then
+    echo "ERROR: $CONF_FILE must define $GIT_BRANCH_VAR"
+    exit 1
+fi
+
+ARGS=(--project "$PROJECT")
+[ "$ENV" = "dev" ] && ARGS+=(--dev)
+[ -n "$GIT_BRANCH" ] && ARGS+=(--git-branch "$GIT_BRANCH")
+
+exec "$SCRIPT_DIR/stop.sh" "${ARGS[@]}"
