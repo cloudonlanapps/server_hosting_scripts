@@ -5,13 +5,30 @@ FROM python:3.12-slim
 # - curl: for healthcheck
 # - git: for cloning from GitHub
 # - postgresql-client: for pg_isready in entrypoint
+# - ffmpeg, poppler-utils: image/video/PDF conversion pipeline used by uploads
+# - wget, ca-certificates: fetching the ImageMagick v7 portable binary below
 ENV DEBIAN_FRONTEND=noninteractive
 ENV DEBCONF_NONINTERACTIVE_SEEN=true
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    git \
-    postgresql-client \
-    && rm -rf /var/lib/apt/lists/*
+        curl \
+        git \
+        postgresql-client \
+        ffmpeg \
+        poppler-utils \
+        ca-certificates \
+        wget \
+    && rm -rf /var/lib/apt/lists/* \
+    # ImageMagick v7 — Debian ships only v6 (no `magick` binary that the
+    # server's media_convert.sh requires). Fetch the official portable
+    # AppImage, extract it (Docker has no FUSE), and link AppRun as
+    # /usr/local/bin/magick.
+    && wget -O /tmp/magick https://imagemagick.org/archive/binaries/magick \
+    && chmod +x /tmp/magick \
+    && (cd /opt && /tmp/magick --appimage-extract >/dev/null) \
+    && mv /opt/squashfs-root /opt/imagemagick \
+    && ln -s /opt/imagemagick/AppRun /usr/local/bin/magick \
+    && rm /tmp/magick \
+    && magick -version | head -1
 
 WORKDIR /app
 
