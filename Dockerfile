@@ -19,15 +19,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         wget \
     && rm -rf /var/lib/apt/lists/* \
     # ImageMagick v7 — Debian ships only v6 (no `magick` binary that the
-    # server's media_convert.sh requires). Fetch the official portable
-    # AppImage, extract it (Docker has no FUSE), and link AppRun as
-    # /usr/local/bin/magick.
-    && wget -O /tmp/magick https://imagemagick.org/archive/binaries/magick \
-    && chmod +x /tmp/magick \
-    && (cd /opt && /tmp/magick --appimage-extract >/dev/null) \
+    # server's media_convert.sh requires). Pull a pinned release AppImage
+    # from GitHub (bytes are immutable per tag) and verify its SHA-256
+    # before installing. Bump IM_VERSION + IM_SHA256 together to upgrade.
+    && IM_VERSION=7.1.2-23 \
+    && IM_SHA256=394276441870822786a8bb0ef8ec56db744567d2662ba5c1e1404e2ad969a28b \
+    && wget -O /tmp/magick.AppImage \
+        "https://github.com/ImageMagick/ImageMagick/releases/download/${IM_VERSION}/ImageMagick-${IM_VERSION}-gcc-x86_64.AppImage" \
+    && echo "${IM_SHA256}  /tmp/magick.AppImage" | sha256sum -c - \
+    && chmod +x /tmp/magick.AppImage \
+    # Docker has no FUSE, so extract the AppImage instead of executing it.
+    && (cd /opt && /tmp/magick.AppImage --appimage-extract >/dev/null) \
     && mv /opt/squashfs-root /opt/imagemagick \
     && ln -s /opt/imagemagick/AppRun /usr/local/bin/magick \
-    && rm /tmp/magick \
+    && rm /tmp/magick.AppImage \
     && magick -version | head -1
 
 WORKDIR /app
