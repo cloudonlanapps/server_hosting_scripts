@@ -35,6 +35,34 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm /tmp/magick.AppImage \
     && magick -version | head -1
 
+# Build-time smoke test of the upload-conversion pipeline. The tools we
+# just installed (magick / ffmpeg) are themselves used to synthesize tiny
+# sample inputs, then we run them through the same conversions the
+# server's media_convert.sh performs on real uploads. Any failure breaks
+# the build, so a broken image can never be deployed.
+#
+# Verified paths:
+#   image  → magick resize + WebP encode
+#   video  → ffmpeg H.264 encode + libwebp_anim encoder present
+RUN set -e \
+    && mkdir -p /tmp/media_check \
+    && cd /tmp/media_check \
+    # Image path.
+    && magick -size 100x100 xc:red sample.png \
+    && magick sample.png -resize 100x100 -quality 90 sample.webp \
+    && test -s sample.webp \
+    # Video path.
+    && ffmpeg -hide_banner -loglevel error -y \
+        -f lavfi -i color=c=blue:s=320x240:d=2 \
+        -c:v libx264 sample.mp4 \
+    && test -s sample.mp4 \
+    && ffmpeg -hide_banner -encoders 2>/dev/null \
+        | grep -q "libwebp_anim" \
+    # pdftoppm is the only PDF tool we use; sanity-check it loads.
+    && pdftoppm -v >/dev/null 2>&1 \
+    && rm -rf /tmp/media_check \
+    && echo "media-conversion smoke test passed"
+
 WORKDIR /app
 
 # Install uv
