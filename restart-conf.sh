@@ -88,6 +88,12 @@ BOOTSTRAP_PASSWORD=$(pass show "${PASS_PREFIX}/${ENV}/bootstrap-password")
 POSTGRES_PASSWORD=$(pass show "${PASS_PREFIX}/${ENV}/postgres-password")
 SECRET_KEY=$(pass show "${PASS_PREFIX}/${ENV}/secret-key")
 
+# Re-resolve the optional generic extra-env (same as deploy-conf.sh) so the
+# values are in this process env and survive the restart; only names forwarded.
+# shellcheck source=lib_extra_env.sh
+source "$SCRIPT_DIR/lib_extra_env.sh"
+resolve_extra_env "${ENV}_EXTRA_ENV"   # sets EXTRA_NAMES, exports the values
+
 echo "==> Restarting ${PROJECT} [${ENV}]"
 
 ARGS=(
@@ -97,6 +103,7 @@ ARGS=(
     --secret-key "$SECRET_KEY"
 )
 
+[ ${#EXTRA_NAMES[@]} -gt 0 ] && ARGS+=(--extra-env-names "${EXTRA_NAMES[*]}")
 [ "$ENV" = "dev" ] && ARGS+=(--dev)
 [ -n "$GIT_BRANCH" ] && ARGS+=(--git-branch "$GIT_BRANCH")
 

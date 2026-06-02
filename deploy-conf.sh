@@ -136,6 +136,15 @@ BOOTSTRAP_PASSWORD=$(pass show "${PASS_PREFIX}/${ENV}/bootstrap-password")
 POSTGRES_PASSWORD=$(pass show "${PASS_PREFIX}/${ENV}/postgres-password")
 SECRET_KEY=$(pass show "${PASS_PREFIX}/${ENV}/secret-key")
 
+# Optional generic extra-env passthrough: the conf may define
+#   <env>_EXTRA_ENV=( "NAME=literal" "NAME=@pass/key" ... )
+# Values are exported into this process env (in memory, like the secrets above)
+# and only the NAMES are forwarded to deploy.sh. This tooling stays
+# domain-agnostic — it never inspects what these variables are for.
+# shellcheck source=lib_extra_env.sh
+source "$SCRIPT_DIR/lib_extra_env.sh"
+resolve_extra_env "${ENV}_EXTRA_ENV"   # sets EXTRA_NAMES, exports the values
+
 echo "==> Deploying ${PROJECT} [${ENV}] (branch: ${GIT_BRANCH:-repo default}, port: ${PORT:-default})"
 
 ARGS=(
@@ -147,6 +156,7 @@ ARGS=(
     --github-token "$GITHUB_TOKEN"
 )
 
+[ ${#EXTRA_NAMES[@]} -gt 0 ] && ARGS+=(--extra-env-names "${EXTRA_NAMES[*]}")
 [ "$ENV" = "dev" ] && ARGS+=(--dev)
 [ -n "$GIT_BRANCH" ] && ARGS+=(--git-branch "$GIT_BRANCH")
 [ -n "$PORT" ] && ARGS+=(--port "$PORT")

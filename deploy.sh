@@ -4,6 +4,9 @@ set -e
 # Run from the script's own directory so docker-compose.yml resolves.
 cd "$(dirname "$0")"
 
+# shellcheck source=lib_extra_env.sh
+source "./lib_extra_env.sh"
+
 # Usage: ./deploy.sh --project NAME --git-url URL --bootstrap-password PASS --postgres-password PASS [options]
 #
 # Required:
@@ -97,6 +100,7 @@ GIT_BRANCH=""
 CUSTOM_DATA_DIR=""
 CUSTOM_PORT=""
 ALLOWED_WEBSITES=""
+EXTRA_ENV_NAMES=""
 
 # Parse arguments
 while [ $# -gt 0 ]; do
@@ -180,6 +184,13 @@ while [ $# -gt 0 ]; do
             ;;
         --allowed-websites=*)
             ALLOWED_WEBSITES="${1#*=}"
+            ;;
+        --extra-env-names)
+            shift
+            EXTRA_ENV_NAMES="$1"
+            ;;
+        --extra-env-names=*)
+            EXTRA_ENV_NAMES="${1#*=}"
             ;;
         *)
             echo "ERROR: Unknown option: $1"
@@ -340,8 +351,21 @@ export CORS_ALLOWED_ORIGINS
 export ENVIRONMENT
 export REPO_BRANCH
 
+# Generic extra-env passthrough. The values are already in this process env
+# (exported by deploy-conf.sh and inherited here); we only emit a names-only
+# compose override so compose forwards them into the container. No secret
+# value is written to disk.
+COMPOSE_FILES=(-f docker-compose.yml)
+OVERRIDE_FILE="$DATA_DIR/docker-compose.override.yml"
+# shellcheck disable=SC2086
+write_extra_env_override "$OVERRIDE_FILE" $EXTRA_ENV_NAMES
+if [ -n "$EXTRA_ENV_NAMES" ]; then
+    echo "==> Extra env passed to container: $EXTRA_ENV_NAMES"
+    COMPOSE_FILES+=(-f "$OVERRIDE_FILE")
+fi
+
 echo "==> Stopping existing containers for $COMPOSE_PROJECT_NAME..."
-docker compose -p "$COMPOSE_PROJECT_NAME" down 2>/dev/null || true
+docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILES[@]}" down 2>/dev/null || true
 
 if [ "$RESET_DB" = true ]; then
     echo "==> Removing database data (--reset)..."
@@ -351,8 +375,8 @@ if [ "$RESET_DB" = true ]; then
 fi
 
 echo "==> Building and starting containers..."
-docker compose -p "$COMPOSE_PROJECT_NAME" build --no-cache
-docker compose -p "$COMPOSE_PROJECT_NAME" up -d
+docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILES[@]}" build --no-cache
+docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILES[@]}" up -d
 
 # Function to wait for containers to become healthy
 wait_for_healthy() {

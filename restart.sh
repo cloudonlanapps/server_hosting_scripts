@@ -52,6 +52,10 @@ POSTGRES_PASSWORD=""
 SECRET_KEY=""
 DEV_MODE=false
 GIT_BRANCH=""
+EXTRA_ENV_NAMES=""
+
+# shellcheck source=lib_extra_env.sh
+source "./lib_extra_env.sh"
 
 # Parse arguments
 while [ $# -gt 0 ]; do
@@ -97,6 +101,13 @@ while [ $# -gt 0 ]; do
             ;;
         --git-branch=*)
             GIT_BRANCH="${1#*=}"
+            ;;
+        --extra-env-names)
+            shift
+            EXTRA_ENV_NAMES="$1"
+            ;;
+        --extra-env-names=*)
+            EXTRA_ENV_NAMES="${1#*=}"
             ;;
         *)
             echo "ERROR: Unknown option: $1"
@@ -174,12 +185,20 @@ export COMPOSE_PROJECT_NAME
 export CORS_ALLOWED_ORIGINS
 export ENVIRONMENT
 
+# Generic extra-env passthrough (values already exported by restart-conf.sh and
+# inherited here). Emit the names-only override so compose forwards them.
+COMPOSE_FILES=(-f docker-compose.yml)
+OVERRIDE_FILE="$DATA_DIR/docker-compose.override.yml"
+# shellcheck disable=SC2086
+write_extra_env_override "$OVERRIDE_FILE" $EXTRA_ENV_NAMES
+[ -n "$EXTRA_ENV_NAMES" ] && COMPOSE_FILES+=(-f "$OVERRIDE_FILE")
+
 echo "==> Port: $PORT"
 echo "    Data directory: $DATA_DIR"
 echo "    Project name: $COMPOSE_PROJECT_NAME"
 
 echo "==> Restarting containers..."
-docker compose -p "$COMPOSE_PROJECT_NAME" up -d
+docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILES[@]}" up -d
 
 # Function to wait for containers to become healthy
 wait_for_healthy() {
