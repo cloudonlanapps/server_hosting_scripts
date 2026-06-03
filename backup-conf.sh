@@ -21,7 +21,8 @@ set -euo pipefail
 # Output (override the root with BACKUP_ROOT=...):
 #   ${BACKUP_ROOT:-$HOME/<project>_backups}/<project>-<env>/<UTC-timestamp>/
 #     ├── db.dump        pg_dump custom format
-#     ├── static.tgz     gzipped tar of the uploads/static dir
+#     ├── uploads.tgz    gzipped tar of the UPLOAD_DIR (uploaded media — critical)
+#     ├── static.tgz     gzipped tar of the STATIC_DIR (served assets), if present
 #     └── MANIFEST.txt    what/when/where + alembic schema version + sizes
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -100,6 +101,10 @@ else
 fi
 
 DB_CONTAINER="${COMPOSE_PROJECT_NAME}-postgres"
+# Bind-mount host paths from docker-compose.yml:
+#   ${DATA_DIR}/uploads -> /data/uploads (UPLOAD_DIR, the uploaded media)
+#   ${DATA_DIR}/static  -> /data/static  (STATIC_DIR, served assets)
+UPLOAD_DIR="${DATA_DIR}/uploads"
 STATIC_DIR="${DATA_DIR}/static"
 POSTGRES_DB="$PROJECT"
 POSTGRES_USER="$PROJECT"
@@ -115,8 +120,8 @@ if ! docker inspect -f '{{.State.Running}}' "$DB_CONTAINER" 2>/dev/null | grep -
     docker ps --format '    {{.Names}}' || true
     exit 1
 fi
-if [ ! -d "$STATIC_DIR" ]; then
-    echo "ERROR: static dir not found: $STATIC_DIR"
+if [ ! -d "$UPLOAD_DIR" ]; then
+    echo "ERROR: upload dir not found: $UPLOAD_DIR"
     exit 1
 fi
 
@@ -128,6 +133,7 @@ mkdir -p "$BK"
 
 echo "==> Backing up ${PROJECT} [${ENV}] (branch: ${GIT_BRANCH:-repo default})"
 echo "    DB container: $DB_CONTAINER   DB/user: $POSTGRES_DB"
+echo "    Upload dir:   $UPLOAD_DIR"
 echo "    Static dir:   $STATIC_DIR"
 echo "    Destination:  $BK"
 
@@ -148,13 +154,20 @@ ALEMBIC_VERSION="$(docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$DB_CONTAINER
     psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc \
     'SELECT version_num FROM alembic_version' 2>/dev/null | tr -d '[:space:]' || true)"
 
-# --- 2. Uploaded files / static dir ---
-echo "==> Archiving static/uploads..."
-tar -czf "$BK/static.tgz" -C "$STATIC_DIR" .
+# --- 2. Uploaded media (critical) + served static assets ---
+echo "==> Archiving uploaded media..."
+tar -czf "$BK/uploads.tgz" -C "$UPLOAD_DIR" .
+
+STATIC_SIZE="(absent)"
+if [ -d "$STATIC_DIR" ]; then
+    echo "==> Archiving static assets..."
+    tar -czf "$BK/static.tgz" -C "$STATIC_DIR" .
+    STATIC_SIZE="$(du -h "$BK/static.tgz" | cut -f1)"
+fi
 
 # --- 3. Manifest ---
 DB_SIZE="$(du -h "$BK/db.dump" | cut -f1)"
-STATIC_SIZE="$(du -h "$BK/static.tgz" | cut -f1)"
+UPLOADS_SIZE="$(du -h "$BK/uploads.tgz" | cut -f1)"
 cat >"$BK/MANIFEST.txt" <<EOF
 project:          $PROJECT
 env:              $ENV
@@ -163,18 +176,21 @@ db_container:     $DB_CONTAINER
 postgres_db:      $POSTGRES_DB
 alembic_version:  ${ALEMBIC_VERSION:-(unknown)}
 created_utc:      $TS
+source_upload:    $UPLOAD_DIR
 source_static:    $STATIC_DIR
 db.dump:          $DB_SIZE (pg_dump -Fc, --no-owner --no-privileges)
+uploads.tgz:      $UPLOADS_SIZE
 static.tgz:       $STATIC_SIZE
 
 Restore (into an isolated DB for rehearsal, NOT over prod):
-  createdb -h HOST -p PORT -U USER restore_target
   pg_restore -h HOST -p PORT -U USER -d restore_target --no-owner "$BK/db.dump"
-  mkdir -p /path/to/restore_static && tar -xzf "$BK/static.tgz" -C /path/to/restore_static
+  mkdir -p TARGET_UPLOAD_DIR && tar -xzf "$BK/uploads.tgz" -C TARGET_UPLOAD_DIR
+  mkdir -p TARGET_STATIC_DIR && tar -xzf "$BK/static.tgz" -C TARGET_STATIC_DIR
 EOF
 
 echo "==> Done."
-echo "    db.dump:    $DB_SIZE"
-echo "    static.tgz: $STATIC_SIZE"
-echo "    schema:     ${ALEMBIC_VERSION:-(unknown)}"
+echo "    db.dump:     $DB_SIZE"
+echo "    uploads.tgz: $UPLOADS_SIZE"
+echo "    static.tgz:  $STATIC_SIZE"
+echo "    schema:      ${ALEMBIC_VERSION:-(unknown)}"
 echo "    -> $BK"
