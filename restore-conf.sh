@@ -41,9 +41,10 @@ BK="${3%/}"
 
 if [ ! -f "$CONF_FILE" ]; then echo "ERROR: Conf file not found: $CONF_FILE"; exit 1; fi
 if [ ! -d "$BK" ]; then echo "ERROR: Backup dir not found: $BK"; exit 1; fi
-for f in db.dump uploads.tgz MANIFEST.txt; do
+for f in db.dump MANIFEST.txt; do
     if [ ! -f "$BK/$f" ]; then echo "ERROR: Backup dir is missing $f: $BK"; exit 1; fi
 done
+if [ ! -d "$BK/uploads" ]; then echo "ERROR: Backup dir is missing the uploads/ folder: $BK"; exit 1; fi
 
 # shellcheck disable=SC1090
 source "$CONF_FILE"
@@ -199,14 +200,14 @@ if ! docker exec -i "$DB_CONTAINER" \
     echo "WARN: pg_restore exited non-zero (often harmless owner/role notices with --no-owner); review output above."
 fi
 
-# --- 2. Extract the uploaded-media + static files into the empty dirs ---
+# --- 2. Copy the uploaded-media + static files (verbatim) into the empty dirs ---
 echo "==> Restoring uploaded media -> $UPLOAD_DIR ..."
 mkdir -p "$UPLOAD_DIR"
-tar -xzf "$BK/uploads.tgz" -C "$UPLOAD_DIR"
-if [ -f "$BK/static.tgz" ]; then
+rsync -a "$BK/uploads/" "$UPLOAD_DIR/"
+if [ -d "$BK/static" ]; then
     echo "==> Restoring static assets -> $STATIC_DIR ..."
     mkdir -p "$STATIC_DIR"
-    tar -xzf "$BK/static.tgz" -C "$STATIC_DIR"
+    rsync -a "$BK/static/" "$STATIC_DIR/"
 fi
 
 # --- 3. Bring the server back (re-runs migrations on boot) ---
