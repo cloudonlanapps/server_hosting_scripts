@@ -57,9 +57,9 @@ REMOTE_MODE=0
 SSH_DESC="local"
 if [ -n "${REMOTE:-}" ]; then
     REMOTE_MODE=1
-    R_HOST="${BACKUP_SSH_HOST:-${SSH_HOST:-}}"
-    R_USER="${BACKUP_SSH_USER:-${SSH_USER:-}}"
-    R_PORT="${BACKUP_SSH_PORT:-${SSH_PORT:-22}}"
+    R_HOST="${REMOTE_SSH_HOST:-${BACKUP_SSH_HOST:-${SSH_HOST:-}}}"
+    R_USER="${REMOTE_SSH_USER:-${BACKUP_SSH_USER:-${SSH_USER:-}}}"
+    R_PORT="${REMOTE_SSH_PORT:-${BACKUP_SSH_PORT:-${SSH_PORT:-22}}}"
     if [ -z "$R_HOST" ]; then echo "ERROR: REMOTE=1 but no SSH host (set SSH_HOST or BACKUP_SSH_HOST)."; exit 1; fi
     SSH_TGT="${R_USER:+$R_USER@}$R_HOST"
     SSH_DESC="${SSH_TGT} (port ${R_PORT})"
