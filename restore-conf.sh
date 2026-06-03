@@ -15,9 +15,17 @@ set -euo pipefail
 #   <backup-dir>  a timestamp dir from backup-conf.sh, containing db.dump,
 #                 uploads.tgz, (optional) static.tgz and MANIFEST.txt.
 #
+# FAIL-SAFE schema check: the backup's alembic revision must EXACTLY equal the
+# target env's code migration head. If they differ at all, restore refuses —
+# it never lets the server "upgrade" or "downgrade" restored data. (To migrate,
+# restore into a matching-code env and then deploy newer code deliberately.)
+#
 # Knobs:
 #   FORCE=1       skip the interactive confirmation prompt
 #   NO_RESTART=1  load data but leave the server stopped (inspect first)
+#   CHECK_ONLY=1  run all validations (incl. the schema check) and exit without
+#                 loading — used by `just restore-clean` to fail fast BEFORE the
+#                 target is blanked. Skips the empty-target check.
 #
 # No DB password needed: pg_restore runs via `docker exec` over the
 # container's trusted local socket.
@@ -87,6 +95,47 @@ if ! docker inspect -f '{{.State.Running}}' "$DB_CONTAINER" 2>/dev/null | grep -
     exit 1
 fi
 
+# --- FAIL-SAFE: backup schema must EXACTLY equal the target code's head ---
+# Uses only the backup MANIFEST + the target's code image (no DB state), so it
+# is valid to run before the target is blanked.
+echo "==> Verifying schema compatibility ..."
+B_REV="$SRC_SCHEMA"
+if [ -z "$B_REV" ] || [ "$B_REV" = "(unknown)" ]; then
+    echo "ERROR: backup MANIFEST has no alembic_version — cannot verify compatibility. Refusing."
+    exit 1
+fi
+IMAGE="$(docker inspect -f '{{.Config.Image}}' "$SERVER_CONTAINER" 2>/dev/null || true)"
+if [ -z "$IMAGE" ]; then
+    echo "ERROR: server container '$SERVER_CONTAINER' not found; deploy $ENV first so its code head is known."
+    exit 1
+fi
+# `alembic heads` reads only the migration scripts (no DB). Dummy settings env
+# satisfies any module-level config import without connecting to anything.
+CODE_HEADS="$(docker run --rm --entrypoint sh \
+    -e DATABASE_URL='postgresql+asyncpg://u:u@localhost:5432/u' \
+    -e SECRET_KEY=x -e UPLOAD_DIR=/tmp -e STATIC_DIR=/tmp -e PROJECT_NAME="$PROJECT" \
+    "$IMAGE" -c 'cd /app && uv run alembic heads 2>/dev/null' \
+    | awk '{print $1}' | grep -E '^[0-9A-Za-z_]+$' || true)"
+if [ -z "$CODE_HEADS" ]; then
+    echo "ERROR: could not determine $ENV code migration head from image $IMAGE. Refusing."
+    exit 1
+fi
+N_HEADS="$(printf '%s\n' "$CODE_HEADS" | grep -c .)"
+if [ "$N_HEADS" -ne 1 ] || [ "$CODE_HEADS" != "$B_REV" ]; then
+    echo "ERROR: schema mismatch — restore refused (fail-safe)."
+    echo "    backup schema:   $B_REV   (from ${SRC_ENV:-?})"
+    echo "    $ENV code head:  $(printf '%s ' $CODE_HEADS)"
+    echo "  Restore only proceeds when the backup schema EQUALS the target code head."
+    echo "  Deploy $ENV at the code whose head is '$B_REV', or restore a backup taken at the code head above."
+    exit 1
+fi
+echo "    OK: backup schema $B_REV matches $ENV code head."
+
+if [ -n "${CHECK_ONLY:-}" ]; then
+    echo "==> CHECK_ONLY: compatibility verified; not loading."
+    exit 0
+fi
+
 # --- Refuse a non-empty target (this script does not blank anything) ---
 if ! docker exec "$DB_CONTAINER" psql -U "$POSTGRES_USER" -d postgres -tAc \
         "SELECT 1 FROM pg_database WHERE datname='$POSTGRES_DB'" | grep -q 1; then
@@ -131,7 +180,8 @@ echo " RESTORE  ${SRC_ENV:-?} backup  ->  ${ENV}  (project ${PROJECT})  [target 
 echo "   backup:        $BK"
 echo "   backup schema: ${SRC_SCHEMA:-unknown}"
 echo "   loads into:    $DB_CONTAINER / $POSTGRES_DB , $UPLOAD_DIR , $STATIC_DIR"
-echo "   after restore: $([ -n "${NO_RESTART:-}" ] && echo 'server left STOPPED' || echo "start $SERVER_CONTAINER -> runs alembic upgrade head")"
+echo "   schema:        $B_REV (matches $ENV code head — migrations will be a no-op)"
+echo "   after restore: $([ -n "${NO_RESTART:-}" ] && echo 'server left STOPPED' || echo "start $SERVER_CONTAINER")"
 [ -n "$SK_NOTE" ] && echo "   $SK_NOTE"
 echo "============================================================"
 if [ -z "${FORCE:-}" ]; then
