@@ -441,8 +441,8 @@ wait_for_healthy() {
     local start_time=$(date +%s)
     local elapsed=0
 
-    local db_container="${COMPOSE_PROJECT_NAME}-postgres"
-    local server_container="${COMPOSE_PROJECT_NAME}-server"
+    local db_container="$DB_CONTAINER_NAME"
+    local server_container="$SERVER_CONTAINER_NAME"
 
     echo "==> Waiting for services to become healthy (timeout: ${timeout}s)..."
 
