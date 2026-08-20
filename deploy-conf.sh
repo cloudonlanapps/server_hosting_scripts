@@ -170,6 +170,8 @@ ARGS=(
 [ -n "$PORT" ] && ARGS+=(--port "$PORT")
 [ -n "$ALLOWED_WEBSITES" ] && ARGS+=(--allowed-websites "$ALLOWED_WEBSITES")
 [ -n "$STACK_NAME" ] && ARGS+=(--stack-name "$STACK_NAME")
+[ -n "${STACK_PREFIX:-}" ] && ARGS+=(--db-container-name "${STACK_PREFIX}_${PROJECT}_postgres_${ENV}")
+[ -n "${STACK_PREFIX:-}" ] && ARGS+=(--server-container-name "${STACK_PREFIX}_${PROJECT}_server_${ENV}")
 [ -n "${PACKAGE:-}" ] && ARGS+=(--package-name "$PACKAGE")
 
 exec "$SCRIPT_DIR/deploy.sh" "${ARGS[@]}"

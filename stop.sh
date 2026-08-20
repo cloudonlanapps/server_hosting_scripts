@@ -19,6 +19,8 @@ PROJECT_NAME=""
 DEV_MODE=false
 GIT_BRANCH=""
 STACK_NAME=""
+DB_CONTAINER_ARG=""
+SERVER_CONTAINER_ARG=""
 
 # Parse arguments
 while [ $# -gt 0 ]; do
@@ -62,6 +64,20 @@ while [ $# -gt 0 ]; do
         --stack-name=*)
             STACK_NAME="${1#*=}"
             ;;
+        --db-container-name)
+            shift
+            DB_CONTAINER_ARG="$1"
+            ;;
+        --db-container-name=*)
+            DB_CONTAINER_ARG="${1#*=}"
+            ;;
+        --server-container-name)
+            shift
+            SERVER_CONTAINER_ARG="$1"
+            ;;
+        --server-container-name=*)
+            SERVER_CONTAINER_ARG="${1#*=}"
+            ;;
         --git-branch=*)
             GIT_BRANCH="${1#*=}"
             ;;
@@ -95,6 +111,8 @@ if [ -n "$STACK_NAME" ]; then
     DB_CONTAINER_NAME="${STACK_NAME}_postgres"
     SERVER_CONTAINER_NAME="${STACK_NAME}_server"
 fi
+[ -n "$DB_CONTAINER_ARG" ] && DB_CONTAINER_NAME="$DB_CONTAINER_ARG"
+[ -n "$SERVER_CONTAINER_ARG" ] && SERVER_CONTAINER_NAME="$SERVER_CONTAINER_ARG"
 export DB_CONTAINER_NAME SERVER_CONTAINER_NAME
 
 echo "==> Stopping containers ($COMPOSE_PROJECT_NAME)..."

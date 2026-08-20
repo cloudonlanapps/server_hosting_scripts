@@ -59,6 +59,8 @@ show_usage() {
     echo "                      differs from --project (default: same as --project)"
     echo "  --stack-name NAME   Names the stack, its containers and its data dir"
     echo "                      (default: <project>-<branch>)"
+    echo "  --db-container-name NAME      Name the postgres container explicitly"
+    echo "  --server-container-name NAME  Name the server container explicitly"
     echo "  --data-dir DIR      Custom data directory (default: ~/.local/share/server_<project>_<branch>)"
     echo "  --allowed-websites SITES  Domain(s) for CORS, comma-separated (required in server mode)"
     echo ""
@@ -103,6 +105,8 @@ show_usage() {
 PROJECT_NAME=""
 PACKAGE_NAME=""
 STACK_NAME=""
+DB_CONTAINER_ARG=""
+SERVER_CONTAINER_ARG=""
 GIT_URL=""
 BOOTSTRAP_PASSWORD=""
 POSTGRES_PASSWORD=""
@@ -136,6 +140,20 @@ while [ $# -gt 0 ]; do
             ;;
         --stack-name=*)
             STACK_NAME="${1#*=}"
+            ;;
+        --db-container-name)
+            shift
+            DB_CONTAINER_ARG="$1"
+            ;;
+        --db-container-name=*)
+            DB_CONTAINER_ARG="${1#*=}"
+            ;;
+        --server-container-name)
+            shift
+            SERVER_CONTAINER_ARG="$1"
+            ;;
+        --server-container-name=*)
+            SERVER_CONTAINER_ARG="${1#*=}"
             ;;
         --project)
             shift
@@ -318,6 +336,11 @@ else
     DB_CONTAINER_NAME="${COMPOSE_PROJECT_NAME}-postgres"
     SERVER_CONTAINER_NAME="${COMPOSE_PROJECT_NAME}-server"
 fi
+# Explicit names win: the stack name cannot express where the component sits
+# relative to the environment, and the established convention puts it in the
+# middle — <prefix>_<project>_postgres_<env>, not <prefix>_<project>_<env>_postgres.
+[ -n "$DB_CONTAINER_ARG" ] && DB_CONTAINER_NAME="$DB_CONTAINER_ARG"
+[ -n "$SERVER_CONTAINER_ARG" ] && SERVER_CONTAINER_NAME="$SERVER_CONTAINER_ARG"
 export DB_CONTAINER_NAME SERVER_CONTAINER_NAME
 
 # Build CORS origins from --allowed-websites

@@ -63,5 +63,7 @@ ARGS=(--project "$PROJECT")
 [ "$ENV" = "dev" ] && ARGS+=(--dev)
 [ -n "$GIT_BRANCH" ] && ARGS+=(--git-branch "$GIT_BRANCH")
 [ -n "$STACK_NAME" ] && ARGS+=(--stack-name "$STACK_NAME")
+[ -n "${STACK_PREFIX:-}" ] && ARGS+=(--db-container-name "${STACK_PREFIX}_${PROJECT}_postgres_${ENV}")
+[ -n "${STACK_PREFIX:-}" ] && ARGS+=(--server-container-name "${STACK_PREFIX}_${PROJECT}_server_${ENV}")
 
 exec "$SCRIPT_DIR/stop.sh" "${ARGS[@]}"
