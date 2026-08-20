@@ -26,6 +26,8 @@ source "./lib_extra_env.sh"
 #   --reset             Drop all tables before starting (fresh database)
 #   --secret-key KEY    JWT signing key (auto-generated if not provided; changing it invalidates existing user sessions)
 #   --github-token TOK  GitHub token for cloning private repo
+#   --package-name NAME Python package installed in the server image, if it differs
+#                       from --project (default: same as --project)
 #   --data-dir DIR      Custom data directory (default: ~/.local/share/server_<project>_<branch>)
 #   --allowed-websites SITES  Domain(s) for CORS, comma-separated (required in server mode)
 
@@ -49,6 +51,8 @@ show_usage() {
     echo "  --reset             Drop all tables before starting (fresh database)"
     echo "  --secret-key KEY    JWT signing key (auto-generated if not provided; changing it invalidates existing user sessions)"
     echo "  --github-token TOK  GitHub token for cloning private repo"
+    echo "  --package-name NAME Python package installed in the server image, if it"
+    echo "                      differs from --project (default: same as --project)"
     echo "  --data-dir DIR      Custom data directory (default: ~/.local/share/server_<project>_<branch>)"
     echo "  --allowed-websites SITES  Domain(s) for CORS, comma-separated (required in server mode)"
     echo ""
@@ -91,6 +95,7 @@ show_usage() {
 }
 
 PROJECT_NAME=""
+PACKAGE_NAME=""
 GIT_URL=""
 BOOTSTRAP_PASSWORD=""
 POSTGRES_PASSWORD=""
@@ -110,6 +115,15 @@ while [ $# -gt 0 ]; do
         --help|-h)
             show_usage
             exit 0
+            ;;
+        --package-name)
+            shift
+            PACKAGE_NAME="$1"
+            shift
+            ;;
+        --package-name=*)
+            PACKAGE_NAME="${1#*=}"
+            shift
             ;;
         --project)
             shift
@@ -295,7 +309,15 @@ DATA_DIR="${CUSTOM_DATA_DIR:-$DEFAULT_DATA_DIR}"
 POSTGRES_DB="$PROJECT_NAME"
 POSTGRES_USER="$PROJECT_NAME"
 
+# PROJECT_NAME names the stack and its database. The Python package installed
+# in the server image is a separate thing — entrypoint.sh runs
+# ${PACKAGE_NAME}_bootstrap and ${PACKAGE_NAME}_server.main:app — and the two
+# only coincide when the deployment is named after the package. Defaults to
+# PROJECT_NAME, so existing deployments are unaffected.
+PACKAGE_NAME="${PACKAGE_NAME:-$PROJECT_NAME}"
+
 echo "==> Project: $PROJECT_NAME"
+if [ "$PACKAGE_NAME" != "$PROJECT_NAME" ]; then echo "    Python package: $PACKAGE_NAME"; fi
 echo "    Git URL: $GIT_URL"
 echo "    Branch: ${REPO_BRANCH:-repo default}"
 echo "    Port: $PORT"
@@ -313,6 +335,7 @@ DEPLOY_CONFIG="$DATA_DIR/.deploy.env"
 echo "==> Saving deployment config to $DEPLOY_CONFIG..."
 cat > "$DEPLOY_CONFIG" << EOF
 PROJECT_NAME=$PROJECT_NAME
+PACKAGE_NAME=$PACKAGE_NAME
 GIT_URL=$GIT_URL
 DEV_MODE=$DEV_MODE
 GIT_BRANCH=$GIT_BRANCH
@@ -338,6 +361,7 @@ fi
 
 # Export environment variables for docker-compose
 export PROJECT_NAME
+export PACKAGE_NAME
 export GIT_URL
 export POSTGRES_DB
 export POSTGRES_USER

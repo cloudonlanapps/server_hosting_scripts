@@ -6,6 +6,12 @@ if [ -z "$PROJECT_NAME" ]; then
     exit 1
 fi
 
+# PACKAGE_NAME is the Python distribution this image actually installed, which
+# is not always the deployment's name. PROJECT_NAME names the stack and its
+# database; the package is whatever the server repo ships. Defaults to
+# PROJECT_NAME, so existing deployments are unaffected.
+PACKAGE_NAME="${PACKAGE_NAME:-$PROJECT_NAME}"
+
 echo "==> Waiting for PostgreSQL to be ready..."
 
 # Wait for PostgreSQL to accept connections
@@ -26,7 +32,7 @@ echo "==> Running database migrations..."
 uv run alembic upgrade head
 
 echo "==> Bootstrapping sudo user..."
-uv run ${PROJECT_NAME}_bootstrap "$BOOTSTRAP_PASSWORD"
+uv run ${PACKAGE_NAME}_bootstrap "$BOOTSTRAP_PASSWORD"
 
 echo "==> Starting server..."
-exec uv run uvicorn ${PROJECT_NAME}_server.main:app --host 0.0.0.0 --port 8000
+exec uv run uvicorn ${PACKAGE_NAME}_server.main:app --host 0.0.0.0 --port 8000

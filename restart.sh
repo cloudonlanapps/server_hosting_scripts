@@ -172,7 +172,9 @@ else
 fi
 
 # Export environment variables for docker-compose
+PACKAGE_NAME="${PACKAGE_NAME:-$PROJECT_NAME}"
 export PROJECT_NAME
+export PACKAGE_NAME
 export GIT_URL
 export POSTGRES_PASSWORD
 export POSTGRES_USER="$PROJECT_NAME"
