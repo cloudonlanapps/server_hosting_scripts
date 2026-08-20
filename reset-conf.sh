@@ -54,8 +54,19 @@ if [ "$ENV" = "dev" ]; then
 else
     COMPOSE_PROJECT_NAME="${PROJECT}-${GIT_BRANCH}"; DATA_NAME="server_${PROJECT}_${GIT_BRANCH}"
 fi
-DB_CONTAINER="${COMPOSE_PROJECT_NAME}-postgres"
-SERVER_CONTAINER="${COMPOSE_PROJECT_NAME}-server"
+# STACK_PREFIX (conf) names the stack after its environment rather than its
+# branch — see deploy-conf.sh. Both naming schemes must resolve here, or reset
+# would look for containers that do not exist.
+if [ -n "${STACK_PREFIX:-}" ]; then
+    STACK_NAME="${STACK_PREFIX}_${PROJECT}_${ENV}"
+    COMPOSE_PROJECT_NAME="$STACK_NAME"
+    DATA_NAME="$STACK_NAME"
+    DB_CONTAINER="${STACK_NAME}_postgres"
+    SERVER_CONTAINER="${STACK_NAME}_server"
+else
+    DB_CONTAINER="${COMPOSE_PROJECT_NAME}-postgres"
+    SERVER_CONTAINER="${COMPOSE_PROJECT_NAME}-server"
+fi
 DATA_DIR="\$HOME/.local/share/${DATA_NAME}"   # literal $HOME — expands on target
 UPLOAD_DIR="${DATA_DIR}/uploads"
 STATIC_DIR="${DATA_DIR}/static"

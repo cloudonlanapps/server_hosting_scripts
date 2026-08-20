@@ -52,6 +52,7 @@ POSTGRES_PASSWORD=""
 SECRET_KEY=""
 DEV_MODE=false
 GIT_BRANCH=""
+STACK_NAME=""
 EXTRA_ENV_NAMES=""
 
 # shellcheck source=lib_extra_env.sh
@@ -99,6 +100,13 @@ while [ $# -gt 0 ]; do
             shift
             GIT_BRANCH="$1"
             ;;
+        --stack-name)
+            shift
+            STACK_NAME="$1"
+            ;;
+        --stack-name=*)
+            STACK_NAME="${1#*=}"
+            ;;
         --git-branch=*)
             GIT_BRANCH="${1#*=}"
             ;;
@@ -143,6 +151,9 @@ if [ "$DEV_MODE" = true ]; then
 else
     DEFAULT_DATA_DIR="${DATA_BASE}/server_${PROJECT_NAME}_${GIT_BRANCH}"
 fi
+# --stack-name names the data dir directly; see deploy.sh for why the default
+# derives it from the branch instead.
+[ -n "$STACK_NAME" ] && DEFAULT_DATA_DIR="${DATA_BASE}/${STACK_NAME}"
 
 # Load deployment config saved by deploy.sh
 DEPLOY_CONFIG="$DEFAULT_DATA_DIR/.deploy.env"
@@ -184,6 +195,11 @@ export BOOTSTRAP_PASSWORD
 export DATA_DIR
 export SERVER_PORT
 export COMPOSE_PROJECT_NAME
+# Container names come from .deploy.env for stacks deployed with --stack-name;
+# older deployments predate those keys, so fall back to the compose default.
+DB_CONTAINER_NAME="${DB_CONTAINER_NAME:-${COMPOSE_PROJECT_NAME}-postgres}"
+SERVER_CONTAINER_NAME="${SERVER_CONTAINER_NAME:-${COMPOSE_PROJECT_NAME}-server}"
+export DB_CONTAINER_NAME SERVER_CONTAINER_NAME
 export CORS_ALLOWED_ORIGINS
 export ENVIRONMENT
 
@@ -209,8 +225,8 @@ wait_for_healthy() {
     local start_time=$(date +%s)
     local elapsed=0
 
-    local db_container="${COMPOSE_PROJECT_NAME}-postgres"
-    local server_container="${COMPOSE_PROJECT_NAME}-server"
+    local db_container="$DB_CONTAINER_NAME"
+    local server_container="$SERVER_CONTAINER_NAME"
 
     echo "==> Waiting for services to become healthy (timeout: ${timeout}s)..."
 

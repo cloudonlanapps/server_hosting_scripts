@@ -147,6 +147,14 @@ resolve_extra_env "${ENV}_EXTRA_ENV"   # sets EXTRA_NAMES, exports the values
 
 echo "==> Deploying ${PROJECT} [${ENV}] (branch: ${GIT_BRANCH:-repo default}, port: ${PORT:-default})"
 
+
+# STACK_PREFIX (conf) names the stack after its environment instead of its git
+# branch: <prefix>_<project>_<env>, e.g. p52_product_ihm_beta. Without it the
+# scripts keep their historical <project>-<branch> naming, so an existing
+# deployment is never renamed out from under itself.
+STACK_NAME=""
+[ -n "${STACK_PREFIX:-}" ] && STACK_NAME="${STACK_PREFIX}_${PROJECT}_${ENV}"
+
 ARGS=(
     --project "$PROJECT"
     --git-url "$GIT_URL"
@@ -161,5 +169,7 @@ ARGS=(
 [ -n "$GIT_BRANCH" ] && ARGS+=(--git-branch "$GIT_BRANCH")
 [ -n "$PORT" ] && ARGS+=(--port "$PORT")
 [ -n "$ALLOWED_WEBSITES" ] && ARGS+=(--allowed-websites "$ALLOWED_WEBSITES")
+[ -n "$STACK_NAME" ] && ARGS+=(--stack-name "$STACK_NAME")
+[ -n "${PACKAGE:-}" ] && ARGS+=(--package-name "$PACKAGE")
 
 exec "$SCRIPT_DIR/deploy.sh" "${ARGS[@]}"

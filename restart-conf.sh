@@ -96,6 +96,14 @@ resolve_extra_env "${ENV}_EXTRA_ENV"   # sets EXTRA_NAMES, exports the values
 
 echo "==> Restarting ${PROJECT} [${ENV}]"
 
+
+# STACK_PREFIX (conf) names the stack after its environment instead of its git
+# branch: <prefix>_<project>_<env>, e.g. p52_product_ihm_beta. Without it the
+# scripts keep their historical <project>-<branch> naming, so an existing
+# deployment is never renamed out from under itself.
+STACK_NAME=""
+[ -n "${STACK_PREFIX:-}" ] && STACK_NAME="${STACK_PREFIX}_${PROJECT}_${ENV}"
+
 ARGS=(
     --project "$PROJECT"
     --bootstrap-password "$BOOTSTRAP_PASSWORD"
@@ -106,5 +114,6 @@ ARGS=(
 [ ${#EXTRA_NAMES[@]} -gt 0 ] && ARGS+=(--extra-env-names "${EXTRA_NAMES[*]}")
 [ "$ENV" = "dev" ] && ARGS+=(--dev)
 [ -n "$GIT_BRANCH" ] && ARGS+=(--git-branch "$GIT_BRANCH")
+[ -n "$STACK_NAME" ] && ARGS+=(--stack-name "$STACK_NAME")
 
 exec "$SCRIPT_DIR/restart.sh" "${ARGS[@]}"

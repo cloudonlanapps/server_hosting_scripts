@@ -18,6 +18,7 @@ cd "$(dirname "$0")"
 PROJECT_NAME=""
 DEV_MODE=false
 GIT_BRANCH=""
+STACK_NAME=""
 
 # Parse arguments
 while [ $# -gt 0 ]; do
@@ -54,6 +55,13 @@ while [ $# -gt 0 ]; do
             shift
             GIT_BRANCH="$1"
             ;;
+        --stack-name)
+            shift
+            STACK_NAME="$1"
+            ;;
+        --stack-name=*)
+            STACK_NAME="${1#*=}"
+            ;;
         --git-branch=*)
             GIT_BRANCH="${1#*=}"
             ;;
@@ -80,6 +88,14 @@ if [ "$DEV_MODE" = true ]; then
 else
     COMPOSE_PROJECT_NAME="${PROJECT_NAME}-${GIT_BRANCH}"
 fi
+[ -n "$STACK_NAME" ] && COMPOSE_PROJECT_NAME="$STACK_NAME"
+DB_CONTAINER_NAME="${COMPOSE_PROJECT_NAME}-postgres"
+SERVER_CONTAINER_NAME="${COMPOSE_PROJECT_NAME}-server"
+if [ -n "$STACK_NAME" ]; then
+    DB_CONTAINER_NAME="${STACK_NAME}_postgres"
+    SERVER_CONTAINER_NAME="${STACK_NAME}_server"
+fi
+export DB_CONTAINER_NAME SERVER_CONTAINER_NAME
 
 echo "==> Stopping containers ($COMPOSE_PROJECT_NAME)..."
 

@@ -28,6 +28,10 @@ source "./lib_extra_env.sh"
 #   --github-token TOK  GitHub token for cloning private repo
 #   --package-name NAME Python package installed in the server image, if it differs
 #                       from --project (default: same as --project)
+#   --stack-name NAME   Names the docker stack, its containers and its data dir.
+#                       Default: <project>-<branch> (dev: <project>-dev), which
+#                       leaks the branch name into paths. Set it to name a stack
+#                       after its environment instead, e.g. p52_product_ihm_beta.
 #   --data-dir DIR      Custom data directory (default: ~/.local/share/server_<project>_<branch>)
 #   --allowed-websites SITES  Domain(s) for CORS, comma-separated (required in server mode)
 
@@ -53,6 +57,8 @@ show_usage() {
     echo "  --github-token TOK  GitHub token for cloning private repo"
     echo "  --package-name NAME Python package installed in the server image, if it"
     echo "                      differs from --project (default: same as --project)"
+    echo "  --stack-name NAME   Names the stack, its containers and its data dir"
+    echo "                      (default: <project>-<branch>)"
     echo "  --data-dir DIR      Custom data directory (default: ~/.local/share/server_<project>_<branch>)"
     echo "  --allowed-websites SITES  Domain(s) for CORS, comma-separated (required in server mode)"
     echo ""
@@ -96,6 +102,7 @@ show_usage() {
 
 PROJECT_NAME=""
 PACKAGE_NAME=""
+STACK_NAME=""
 GIT_URL=""
 BOOTSTRAP_PASSWORD=""
 POSTGRES_PASSWORD=""
@@ -122,6 +129,13 @@ while [ $# -gt 0 ]; do
             ;;
         --package-name=*)
             PACKAGE_NAME="${1#*=}"
+            ;;
+        --stack-name)
+            shift
+            STACK_NAME="$1"
+            ;;
+        --stack-name=*)
+            STACK_NAME="${1#*=}"
             ;;
         --project)
             shift
@@ -291,6 +305,21 @@ else
     echo "==> Deploying branch: $GIT_BRANCH"
 fi
 
+# --stack-name overrides both the data directory and the compose project name.
+# The default derives them from the git branch, which is why deployments end up
+# at paths like server_myproduct_beta_release: the branch leaks into the name.
+# Naming the stack after its environment keeps the two independent.
+if [ -n "$STACK_NAME" ]; then
+    DEFAULT_DATA_DIR="${DATA_BASE}/${STACK_NAME}"
+    COMPOSE_PROJECT_NAME="$STACK_NAME"
+    DB_CONTAINER_NAME="${STACK_NAME}_postgres"
+    SERVER_CONTAINER_NAME="${STACK_NAME}_server"
+else
+    DB_CONTAINER_NAME="${COMPOSE_PROJECT_NAME}-postgres"
+    SERVER_CONTAINER_NAME="${COMPOSE_PROJECT_NAME}-server"
+fi
+export DB_CONTAINER_NAME SERVER_CONTAINER_NAME
+
 # Build CORS origins from --allowed-websites
 if [ "$DEV_MODE" = true ]; then
     CORS_ALLOWED_ORIGINS="*"
@@ -340,6 +369,9 @@ GIT_BRANCH=$GIT_BRANCH
 PORT=$PORT
 DATA_DIR=$DATA_DIR
 COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME
+STACK_NAME=$STACK_NAME
+DB_CONTAINER_NAME=$DB_CONTAINER_NAME
+SERVER_CONTAINER_NAME=$SERVER_CONTAINER_NAME
 ENVIRONMENT=$ENVIRONMENT
 REPO_BRANCH=$REPO_BRANCH
 ALLOWED_WEBSITES=$ALLOWED_WEBSITES
