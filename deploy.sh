@@ -20,7 +20,8 @@ source "./lib_extra_env.sh"
 #   (default)           Server mode: localhost-only binding, requires --allowed-websites
 #
 # Options:
-#   --git-branch BRANCH Git branch to deploy (required in server mode, optional in dev mode)
+#   --git-branch REF    Branch, tag, or commit SHA to deploy (required in server mode,
+#                       optional in dev mode; defaults to main)
 #   --port PORT         Host port (default: 8001)
 #   --reset             Drop all tables before starting (fresh database)
 #   --secret-key KEY    JWT signing key (auto-generated if not provided; changing it invalidates existing user sessions)
@@ -42,7 +43,8 @@ show_usage() {
     echo "  (default)           Server mode: localhost-only binding, requires --allowed-websites"
     echo ""
     echo "Options:"
-    echo "  --git-branch BRANCH Git branch to deploy (required in server mode, optional in dev mode)"
+    echo "  --git-branch REF    Branch, tag, or commit SHA to deploy (required in server"
+    echo "                      mode, optional in dev mode; defaults to main)"
     echo "  --port PORT         Host port (default: 8001)"
     echo "  --reset             Drop all tables before starting (fresh database)"
     echo "  --secret-key KEY    JWT signing key (auto-generated if not provided; changing it invalidates existing user sessions)"
