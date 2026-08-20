@@ -139,6 +139,24 @@ Dev mode exposes the port directly and allows all CORS origins — no nginx need
 curl http://localhost:8001/health
 ```
 
+
+### Deploying a specific commit
+
+`--git-branch` accepts a **branch, a tag, or a commit SHA** (full or short).
+Omitted, it defaults to `main`.
+
+```bash
+./deploy.sh --project myproduct \
+  --git-url https://github.com/org/myproduct_server.git \
+  --git-branch 4b20e9e \
+  --bootstrap-password <PASS> --postgres-password <PASS>
+```
+
+Branches and tags take a fast `--single-branch` clone. A commit SHA needs the
+full history, so that path clones everything and then checks the commit out
+detached — slower, but it is the only way `git` will resolve a bare SHA.
+
+
 ## Managing Deployments
 
 ```bash
