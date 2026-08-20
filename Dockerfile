@@ -96,7 +96,9 @@ RUN if [ -z "$GIT_URL" ]; then \
         echo "==> Checked out ${REPO_REF} (branch or tag)"; \
     else \
         echo "==> ${REPO_REF} is not a branch or tag; retrying as a commit"; \
-        rm -rf /app; \
+        # cd out of /app first: it is the WORKDIR, so it is this shell's cwd, \
+        # and removing it leaves git unable to resolve a working directory. \
+        cd / && rm -rf /app; \
         if git clone "$CLONE_URL" /app 2>>/tmp/clone_err; then \
             git -C /app checkout --detach "$REPO_REF" 2>>/tmp/clone_err \
             || { echo ""; \
