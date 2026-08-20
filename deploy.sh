@@ -112,11 +112,9 @@ while [ $# -gt 0 ]; do
         --package-name)
             shift
             PACKAGE_NAME="$1"
-            shift
             ;;
         --package-name=*)
             PACKAGE_NAME="${1#*=}"
-            shift
             ;;
         --project)
             shift
