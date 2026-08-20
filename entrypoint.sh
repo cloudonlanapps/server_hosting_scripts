@@ -28,11 +28,16 @@ done
 
 echo "    PostgreSQL is ready."
 
+# --frozen --no-dev matches how the image was built (uv sync --frozen --no-dev).
+# Without them `uv run` re-resolves the project on every start and installs the
+# dev group — ruff, basedpyright, nodejs-wheel-binaries, ~80MB fetched before
+# the server can answer a request. On a cold start that is slow enough to fail
+# the deploy's health wait on a stack that is otherwise fine.
 echo "==> Running database migrations..."
-uv run alembic upgrade head
+uv run --frozen --no-dev alembic upgrade head
 
 echo "==> Bootstrapping sudo user..."
-uv run ${PACKAGE_NAME}_bootstrap "$BOOTSTRAP_PASSWORD"
+uv run --frozen --no-dev ${PACKAGE_NAME}_bootstrap "$BOOTSTRAP_PASSWORD"
 
 echo "==> Starting server..."
-exec uv run uvicorn ${PACKAGE_NAME}_server.main:app --host 0.0.0.0 --port 8000
+exec uv run --frozen --no-dev uvicorn ${PACKAGE_NAME}_server.main:app --host 0.0.0.0 --port 8000
