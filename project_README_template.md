@@ -61,7 +61,7 @@ on the first deploy.
 | `--dir DIR` | where the deployment lives |
 | `--hosting-ref REF` | pin the tooling to a branch, tag or commit (default `main`) |
 | `--server-ref COMMIT` | build **dev** from a commit instead of `main` |
-| `--no-install` | refresh the conf and wrapper without re-fetching the tooling |
+| `--no-install` | refresh the conf and justfile without re-fetching the tooling |
 
 Re-running is safe: it never overwrites an existing conf and never touches
 `backup/`.
@@ -85,7 +85,7 @@ Delete this note once the values are in. -->
 
 ```bash
 cd ~/<project>
-./ops deploy dev          # or beta, or prod
+just deploy dev          # or beta, or prod
 ```
 
 ## 5. Configure nginx — public environments only, once
@@ -98,17 +98,17 @@ Generates the vhost and requests a certificate. Skip it for dev. There is no
 re-install: certbot rewrites the vhost in place, so a second run would drop a
 live site to plain HTTP.
 
-## Day-to-day: `./ops`
+## Day-to-day: `just`
 
 Run from `~/<project>`. `<env>` is `prod`, `beta` or `dev`.
 
 ```bash
-./ops --list                # every recipe
-./ops deploy <env>          # rebuild the image and restart
-./ops restart <env>         # restart without rebuilding
-./ops stop <env>            # stop the stack
-./ops reset <env>           # DESTRUCTIVE: empty the database, clear uploads and static
-./ops backup-pass           # back up the pass store and its GPG key material
+just --list                # every recipe
+just deploy <env>          # rebuild the image and restart
+just restart <env>         # restart without rebuilding
+just stop <env>            # stop the stack
+just reset <env>           # DESTRUCTIVE: empty the database, clear uploads and static
+just backup-pass           # back up the pass store and its GPG key material
 ```
 
 ## Restore a backup
@@ -125,10 +125,10 @@ backup/files/uploads/              uploaded media
 
 ```bash
 cd ~/<project>
-./ops restore-list                  # what is available locally
-./ops restore-dry <env>             # resolve everything, touch nothing
-./ops restore-backup <env>          # newest archive
-./ops restore-backup <env> <stamp>  # a specific one
+just restore-list                  # what is available locally
+just restore-dry <env>             # resolve everything, touch nothing
+just restore-backup <env>          # newest archive
+just restore-backup <env> <stamp>  # a specific one
 ```
 
 Restore refuses when the archive's schema revision does not match the running

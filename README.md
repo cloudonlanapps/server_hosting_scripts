@@ -2,7 +2,7 @@
 
 Generic tooling for running a FastAPI + PostgreSQL server as a Docker stack.
 Nothing here names a product. You write one installer per product; it fetches
-this repo and generates a conf and a wrapper.
+this repo and generates a conf and a justfile.
 
 ## Prerequisites
 
@@ -30,7 +30,7 @@ for beta.
 ## How to write an installer for a new product
 
 An installer is one shipped file. It writes a conf, fetches this repo at a
-chosen ref, and generates an `ops` wrapper.
+chosen ref, and generates its justfile.
 
 **1. Choose values that do not collide with existing deployments:** a
 `PROJECT` name, a `PASS_PREFIX`, and one port per environment.
@@ -74,27 +74,24 @@ precedence over `security.conf`:
 NGINX_CLIENT_MAX_BODY_SIZE="60M"     # must exceed the server's upload limit
 ```
 
-**5. Have the installer fetch this repo and generate the wrapper.** The wrapper
-must be a script, not a justfile — `just` has no catch-all recipe, so a wrapper
-justfile would need regenerating whenever a recipe is added. Export the two
-variables rather than passing them as `just` assignments, or `./ops --list` is
-parsed as a recipe name:
+**5. Have the installer fetch this repo and write the deployment justfile.**
+It exports this deployment's paths and imports the generic recipes, so `just`
+runs from the deployment directory with nothing in between:
 
 ```bash
 git clone "$HOSTING_SCRIPTS_URL" "$DIR/server_hosting_scripts"
 git -C "$DIR/server_hosting_scripts" checkout "$HOSTING_SCRIPTS_REF"
 
-cat > "$DIR/ops" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export CONF="$DIR/<conf-name>.conf"
-export BACKUP_DIR="$DIR/backup"
-exec just -f "$DIR/server_hosting_scripts/justfile" \
-          -d "$DIR/server_hosting_scripts" "$@"
+cat > "$DIR/justfile" <<EOF
+export CONF := justfile_directory() / "<conf-name>.conf"
+export BACKUP_DIR := justfile_directory() / "backup"
+
+import 'server_hosting_scripts/justfile'
 EOF
-chmod +x "$DIR/ops"
 ```
+
+Export rather than declare: `just` rejects a variable defined in both the
+importing and the imported file.
 
 Clone then checkout — `git clone --branch` rejects a raw commit, so pinning
 would fail.
@@ -120,15 +117,15 @@ Missing ones are listed by name on the first deploy.
 
 ## Commands once deployed
 
-Run `./ops` from the deployment directory. `<env>` is any name in `ENVS`.
+Run `just` from the deployment directory. `<env>` is any name in `ENVS`.
 
 ```bash
-./ops --list                # every recipe
-./ops deploy <env>          # rebuild the image and restart the stack
-./ops restart <env>         # restart using the saved config
-./ops stop <env>            # stop the stack
-./ops reset <env>           # DESTRUCTIVE: empty the database, clear uploads and static
-./ops backup-pass           # back up the pass store and its GPG key material
+just --list                # every recipe
+just deploy <env>          # rebuild the image and restart the stack
+just restart <env>         # restart using the saved config
+just stop <env>            # stop the stack
+just reset <env>           # DESTRUCTIVE: empty the database, clear uploads and static
+just backup-pass           # back up the pass store and its GPG key material
 ```
 
 ### Restore
@@ -144,10 +141,10 @@ backup/files/uploads/              uploaded media
 ```
 
 ```bash
-./ops restore-list                  # what is available locally
-./ops restore-dry <env>             # resolve everything, touch nothing
-./ops restore-backup <env>          # newest archive
-./ops restore-backup <env> <stamp>  # a specific one
+just restore-list                  # what is available locally
+just restore-dry <env>             # resolve everything, touch nothing
+just restore-backup <env>          # newest archive
+just restore-backup <env> <stamp>  # a specific one
 ```
 
 Restore refuses when the archive's alembic revision does not match the running
@@ -170,7 +167,7 @@ sudo ./setup-security.sh --domain <domain>:<port>      # ufw, fail2ban, rate lim
 sudo ./audit-security.sh --domain <domain>:<port>      # check without changing
 ```
 
-### Not wired into `ops`
+### Not wired into the justfile
 
 `backup-conf.sh`, `restore-conf.sh` and `verify-conf.sh` implement only the
 branch-based container naming and ignore `STACK_PREFIX`, so on a deployment
