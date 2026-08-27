@@ -1,34 +1,36 @@
 # Lifecycle recipes for a deployed server. Generic: nothing here names a
-# product. The deployment supplies CONF and BACKUP_DIR, normally through the
-# wrapper script its installer generated.
+# product. The deployment supplies CONF and BACKUP_DIR by exporting them.
+
 #
 # First-run bootstrap is not here — that is the installer's job. These are the
 # commands for a deployment that already exists.
 #
-# Run via the wrapper in the deployment directory:
-#     ./ops deploy prod
-# or directly:
-#     just -f server_hosting_scripts/justfile CONF=/path/host.conf deploy prod
-
-# Absolute path to the host conf. No default: a generic justfile cannot know
-# which product it is serving, and guessing would be worse than failing.
-CONF := env_var_or_default("CONF", "")
-
-# Where restore looks for archives. Nothing here puts them there.
-BACKUP_DIR := env_var_or_default("BACKUP_DIR", justfile_directory() / ".." / "backup")
-
-scripts := justfile_directory()
+# Not run directly. A deployment's justfile imports this one and exports the
+# two values it needs:
+#
+#     export CONF := justfile_directory() / "host_<product>.conf"
+#     export BACKUP_DIR := justfile_directory() / "backup"
+#     import 'server_hosting_scripts/justfile'
+#
+# Then `just deploy prod` works from the deployment directory. CONF and
+# BACKUP_DIR are read from the environment rather than declared here, because
+# `just` rejects a variable defined in both the importing and imported file.
+#
+# source_directory() rather than justfile_directory(): under an import the
+# latter resolves to the importing file's directory, which would send every
+# recipe looking for these scripts in the wrong place.
+scripts := source_directory()
 
 default:
     @just --list
 
-# Fail early and clearly when the wrapper did not pass CONF through.
+# Fail early and clearly when the importing justfile did not export CONF.
 _require-conf:
     #!/usr/bin/env bash
-    if [ -z "{{ CONF }}" ] || [ ! -f "{{ CONF }}" ]; then
-        echo "ERROR: CONF is unset or not a file: '{{ CONF }}'" >&2
-        echo "       Run through the deployment's wrapper, or pass it:" >&2
-        echo "         just -f {{ justfile_directory() }}/justfile CONF=/path/host.conf <recipe>" >&2
+    if [ -z "${CONF:-}" ] || [ ! -f "${CONF:-}" ]; then
+        echo "ERROR: CONF is unset or not a file: '${CONF:-}'" >&2
+        echo "       Run from a deployment directory whose justfile imports this one," >&2
+        echo "       or set it: CONF=/path/host.conf just -f {{ scripts }}/justfile <recipe>" >&2
         exit 1
     fi
 
@@ -36,22 +38,22 @@ _require-conf:
 
 # Deploy <env>: rebuild the image and restart the stack.
 deploy env="": _require-conf
-    @if [ -z "{{env}}" ]; then just --list; else "{{scripts}}/deploy-conf.sh" "{{ CONF }}" "{{env}}"; fi
+    @if [ -z "{{env}}" ]; then just --list; else "{{scripts}}/deploy-conf.sh" "$CONF" "{{env}}"; fi
 
 # Restart <env> reusing the saved deploy config (faster than deploy).
 restart env="": _require-conf
-    @if [ -z "{{env}}" ]; then just --list; else "{{scripts}}/restart-conf.sh" "{{ CONF }}" "{{env}}"; fi
+    @if [ -z "{{env}}" ]; then just --list; else "{{scripts}}/restart-conf.sh" "$CONF" "{{env}}"; fi
 
 # Stop <env>. No secrets needed.
 stop env="": _require-conf
-    @if [ -z "{{env}}" ]; then just --list; else "{{scripts}}/stop-conf.sh" "{{ CONF }}" "{{env}}"; fi
+    @if [ -z "{{env}}" ]; then just --list; else "{{scripts}}/stop-conf.sh" "$CONF" "{{env}}"; fi
 
 # DESTRUCTIVE, and single purpose — it neither backs up nor restores. Take a
 # backup first.
 
 # Blank <env>: stop the server, empty the database, clear uploads and static.
 reset env="": _require-conf
-    @if [ -z "{{env}}" ]; then just --list; else "{{scripts}}/reset-conf.sh" "{{ CONF }}" "{{env}}"; fi
+    @if [ -z "{{env}}" ]; then just --list; else "{{scripts}}/reset-conf.sh" "$CONF" "{{env}}"; fi
 
 # ── Restore ───────────────────────────────────────────────────────────────────
 # Reads archives already sitting in BACKUP_DIR. Putting them there is out of
@@ -60,15 +62,15 @@ reset env="": _require-conf
 
 # List the archives available locally.
 restore-list: _require-conf
-    @"{{scripts}}/restore-backup.sh" "{{ CONF }}" --list --backup-dir "{{ BACKUP_DIR }}"
+    @"{{scripts}}/restore-backup.sh" "$CONF" --list --backup-dir "$BACKUP_DIR"
 
 # Restore <env> from an archive in BACKUP_DIR — newest, or a given stamp/path.
 restore-backup env="" archive="": _require-conf
-    @if [ -z "{{env}}" ]; then just --list; else "{{scripts}}/restore-backup.sh" "{{ CONF }}" "{{env}}" {{archive}} --backup-dir "{{ BACKUP_DIR }}"; fi
+    @if [ -z "{{env}}" ]; then just --list; else "{{scripts}}/restore-backup.sh" "$CONF" "{{env}}" {{archive}} --backup-dir "$BACKUP_DIR"; fi
 
 # Show what a restore would do, touching nothing.
 restore-dry env="" archive="": _require-conf
-    @if [ -z "{{env}}" ]; then just --list; else DRY_RUN=1 "{{scripts}}/restore-backup.sh" "{{ CONF }}" "{{env}}" {{archive}} --backup-dir "{{ BACKUP_DIR }}"; fi
+    @if [ -z "{{env}}" ]; then just --list; else DRY_RUN=1 "{{scripts}}/restore-backup.sh" "$CONF" "{{env}}" {{archive}} --backup-dir "$BACKUP_DIR"; fi
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
 
@@ -78,7 +80,7 @@ restore-dry env="" archive="": _require-conf
 
 # Back up the `pass` store AND the GPG key material needed to read it.
 backup-pass: _require-conf
-    @"{{scripts}}/backup-pass.sh" "{{ CONF }}"
+    @"{{scripts}}/backup-pass.sh" "$CONF"
 
 # ── Notes ─────────────────────────────────────────────────────────────────────
 #
