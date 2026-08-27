@@ -20,9 +20,14 @@ services:
     build:
       context: .
       args:
-        GITHUB_TOKEN: ${GITHUB_TOKEN:-}
         REPO_BRANCH: ${REPO_BRANCH:-}
         GIT_URL: ${GIT_URL}
+      # A build secret, not a build arg: an arg is interpolated into the RUN
+      # instruction, which BuildKit echoes on failure and `docker history`
+      # keeps in the layer metadata. The secret is a tmpfs file visible only to
+      # the one RUN that mounts it.
+      secrets:
+        - gh_token
     container_name: ${SERVER_CONTAINER_NAME}
     restart: unless-stopped
     environment:
@@ -56,3 +61,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+
+secrets:
+  gh_token:
+    # Read from the environment deploy.sh already exports; never written to disk.
+    environment: GITHUB_TOKEN

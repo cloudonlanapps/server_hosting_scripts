@@ -68,8 +68,14 @@ WORKDIR /app
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# Clone source from GitHub using HTTPS
-# For private repos, pass GITHUB_TOKEN build arg
+# Clone source from GitHub using HTTPS.
+#
+# For private repos the token arrives as a BuildKit secret mounted at
+# /run/secrets/gh_token, not as a build arg. A build arg is substituted into
+# the RUN instruction itself, so the token ends up in BuildKit's output and in
+# `docker history` for the resulting image — readable by anyone who can pull
+# it. The secret is a tmpfs file that exists only for this RUN and enters no
+# layer.
 #
 # REPO_BRANCH accepts a branch, a tag, OR a full/short commit SHA. Left empty
 # it defaults to main.
@@ -79,17 +85,19 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # deploying a specific commit was previously impossible. We keep that fast
 # single-branch path for the common case and fall back to a full clone plus a
 # detached checkout when the ref is a commit.
-ARG GITHUB_TOKEN=
 ARG REPO_BRANCH=
 ARG GIT_URL
-RUN if [ -z "$GIT_URL" ]; then \
+RUN --mount=type=secret,id=gh_token \
+    if [ -z "$GIT_URL" ]; then \
         echo "ERROR: GIT_URL build arg is required"; \
         exit 1; \
     fi; \
     REPO_REF="${REPO_BRANCH:-main}"; \
     CLONE_URL="$GIT_URL"; \
-    if [ -n "$GITHUB_TOKEN" ]; then \
-        CLONE_URL=$(echo "$GIT_URL" | sed "s|https://|https://${GITHUB_TOKEN}@|"); \
+    if [ -s /run/secrets/gh_token ]; then \
+        GH_TOKEN="$(cat /run/secrets/gh_token)"; \
+        CLONE_URL="https://${GH_TOKEN}@${GIT_URL#https://}"; \
+        unset GH_TOKEN; \
     fi; \
     echo "==> Fetching ${REPO_REF}"; \
     if git clone --branch "$REPO_REF" --single-branch "$CLONE_URL" /app 2>/tmp/clone_err; then \
@@ -110,7 +118,7 @@ RUN if [ -z "$GIT_URL" ]; then \
         else \
             echo ""; \
             echo "ERROR: Failed to clone repository."; \
-            if [ -z "$GITHUB_TOKEN" ]; then \
+            if [ ! -s /run/secrets/gh_token ]; then \
                 echo "The repo may be private. Re-run with --github-token <TOKEN>"; \
             fi; \
             echo ""; \

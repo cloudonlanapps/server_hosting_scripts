@@ -76,6 +76,18 @@ GIT_BRANCH="${!GIT_BRANCH_VAR}"
 PORT="${!PORT_VAR}"
 ALLOWED_WEBSITES="${!ALLOWED_WEBSITES_VAR}"
 
+# A deployed environment must track a branch, never a commit. Pinning beta or
+# prod to a SHA produces a stack nobody can move forward: the next promotion
+# has nothing to fast-forward, and the deployed code stops corresponding to any
+# branch a reader can inspect. Only dev may name a commit, for reproducing a
+# specific build.
+if [ "$ENV" != "dev" ] && printf '%s' "$GIT_BRANCH" | grep -qiE '^[0-9a-f]{7,40}$'; then
+    echo "ERROR: ${GIT_BRANCH_VAR} looks like a commit SHA: $GIT_BRANCH"
+    echo "       '$ENV' must track a branch (e.g. release, beta_release)."
+    echo "       Only dev may be pinned to a commit."
+    exit 1
+fi
+
 # In dev mode all per-env settings are optional (deploy.sh defaults port to
 # 8001 and CORS to "*"). In server mode, branch / port / allowed_websites
 # are all required.
