@@ -224,8 +224,14 @@ gzip -dc "$DUMP_SRC" > "$WORK/dump.tar"
 echo "==> [2/4] Checking schema revision"
 # The revision travels inside the dump, so this works on any archive the
 # operator hands us — no sidecar manifest, no contact with the backup host.
-ARCHIVE_REV="$(pg_restore --data-only -t alembic_version -f - "$WORK/dump.tar" 2>/dev/null \
+#
+# Read it with the container's pg_restore, not the host's: the host is not
+# required to have PostgreSQL client tools installed, and the version that
+# matters is the one that will perform the restore.
+docker cp "$WORK/dump.tar" "$PG":/tmp/revcheck.tar >/dev/null
+ARCHIVE_REV="$(docker exec "$PG" pg_restore --data-only -t alembic_version -f - /tmp/revcheck.tar 2>/dev/null \
     | grep -Eo '^[0-9a-z]{8,}$' | head -1 || true)"
+docker exec "$PG" rm -f /tmp/revcheck.tar
 TARGET_REV="$(docker exec "$PG" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc \
     'select version_num from alembic_version' 2>/dev/null | tr -d '[:space:]' || true)"
 if [ -z "$ARCHIVE_REV" ]; then
