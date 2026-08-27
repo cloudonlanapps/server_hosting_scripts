@@ -100,9 +100,9 @@ list_archives() {
         echo
         echo "Copy a backup onto this host first — nothing here fetches it."
         echo "Expected:"
-        echo "  ${PROJECT}-<stamp>.tar.gz   database archive"
-        echo "  files/static/               page content, images, video"
-        echo "  files/uploads/              member uploads"
+        printf '  %-26s %s\n' "${PROJECT}-<stamp>.tar.gz" "database archive"
+        printf '  %-26s %s\n' "files/static/"  "page content, images, video"
+        printf '  %-26s %s\n' "files/uploads/" "member uploads"
         return 1
     fi
     echo
