@@ -8,7 +8,7 @@ this repo and generates a conf and a justfile.
 
 - **Docker**, with the current user in the `docker` group:
   `groups | grep docker` — fix with `sudo usermod -aG docker $USER && newgrp docker`
-- **git**, **just**, and **`pass`** with a working gpg-agent
+- **git**, **just** (1.19+, for `import`), and **`pass`** with a working gpg-agent
 - For a private server repo: a fine-grained PAT with **Contents: Read**
 
 ## What the server repo must provide
