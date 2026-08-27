@@ -1,310 +1,172 @@
-# FastAPI + PostgreSQL: Multi-Instance Docker Deployment
+# server_hosting_scripts
 
-Have you ever built a FastAPI server backed by PostgreSQL, then realized you need to run
-multiple instances of it — one for production, one for beta testing, maybe one more to
-debug a feature branch — all on the same machine?
-
-Setting that up by hand is tedious: separate databases, separate containers, port
-management, nginx routing, SSL certificates, security hardening... it adds up fast.
-
-These scripts handle all of that. You run one command to deploy, and each instance gets
-its own PostgreSQL database, its own container, its own port, and its own data directory.
-Add nginx and SSL with one more command. Done.
-
-## How It Works
-
-Each call to `deploy.sh` spins up **two Docker containers**:
-
-1. **PostgreSQL** — a dedicated database instance for this deployment
-2. **Server** — clones your repo from a specific git branch, installs dependencies, runs
-   migrations, and starts uvicorn
-
-```
-                    ┌──────────────────────────────────────────────────┐
-                    │                 Same Server                      │
-                    │                                                  │
-beta.example.com ───┼──► Nginx ──► :8001 ──► myproduct-main (server)  │
-                    │                        myproduct-main (postgres) │
-                    │                                                  │
-www.example.com  ───┼──► Nginx ──► :8000 ──► myproduct-release (server)│
-example.com      ───┤                        myproduct-release (postgres)│
-                    └──────────────────────────────────────────────────┘
-```
-
-In **server mode**, the port is bound to `localhost` only — external traffic must go
-through nginx. In **dev mode**, the port is exposed directly so you can hit it from
-your browser or API client.
-
-All deployment data (database files, uploads, static assets, config) is stored under
-`~/.local/share/` in the deploying user's home directory. No root access required for
-deployment, and everything is in one place for easy backup.
-
-## What Your Server Needs to Follow
-
-These scripts expect two entry points derived from your `--project` name:
-
-| Convention | Example (--project myproduct) |
-|---|---|
-| **Server module** | `myproduct_server.main:app` — the uvicorn entry point |
-| **Bootstrap command** | `myproduct_bootstrap` — a CLI command to seed the initial admin user |
-| **Migrations** | `alembic upgrade head` — run automatically on every deploy/restart |
-| **Dependency manager** | [uv](https://docs.astral.sh/uv/) with a `uv.lock` file |
-
-Your repo should have a branch for each instance you want to run (e.g., `main` for beta,
-`release` for production).
+Generic tooling for running a FastAPI + PostgreSQL server as a Docker stack.
+Nothing here names a product. You write one installer per product; it fetches
+this repo and generates a conf and a wrapper.
 
 ## Prerequisites
 
-- **Docker** installed and running
-- Current user in the **docker group** (to run Docker without sudo)
-  ```bash
-  # Check
-  groups | grep docker
-  # Fix
-  sudo usermod -aG docker $USER && newgrp docker
-  ```
-- **git** (used inside the Docker build to clone your repo)
-- For private repos: a GitHub token with read access
+- **Docker**, with the current user in the `docker` group:
+  `groups | grep docker` — fix with `sudo usermod -aG docker $USER && newgrp docker`
+- **git**, **just**, and **`pass`** with a working gpg-agent
+- For a private server repo: a fine-grained PAT with **Contents: Read**
 
-## Quick Start
+## What the server repo must provide
 
-### 1. Deploy
+Derived from `PROJECT` (or `PACKAGE`, when they differ):
 
-```bash
-# Make scripts executable (one-time)
-chmod +x *.sh
+| | Example for `PROJECT="myproduct"` |
+|---|---|
+| uvicorn entry point | `myproduct_server.main:app` |
+| bootstrap command | `myproduct_bootstrap` — seeds the initial admin |
+| migrations | `alembic upgrade head`, run on every deploy |
+| dependencies | [uv](https://docs.astral.sh/uv/) with a committed `uv.lock` |
 
-# Beta — deploy 'main' branch on port 8001 (default)
-./deploy.sh --project myproduct \
-  --git-url https://github.com/org/myproduct_server.git \
-  --git-branch main \
-  --bootstrap-password mybootstrappass \
-  --postgres-password mydbpass \
-  --allowed-websites beta.example.com
+One branch per deployed environment, e.g. `release` for prod, `beta_release`
+for beta.
 
-# Production — deploy 'release' branch on port 8000
-./deploy.sh --project myproduct \
-  --git-url https://github.com/org/myproduct_server.git \
-  --git-branch release --port 8000 \
-  --bootstrap-password mybootstrappass \
-  --postgres-password mydbpass \
-  --allowed-websites www.example.com,example.com
-```
+---
 
-### 2. Connect Nginx (server mode only)
+## How to write an installer for a new product
 
-Server mode binds to localhost, so you need nginx to route external traffic:
+An installer is one shipped file. It writes a conf, fetches this repo at a
+chosen ref, and generates an `ops` wrapper.
+
+**1. Choose values that do not collide with existing deployments:** a
+`PROJECT` name, a `PASS_PREFIX`, and one port per environment.
+
+**2. Write the conf your installer will emit.** Required:
 
 ```bash
-sudo ./setup-nginx.sh --domain beta.example.com --port 8001
-sudo ./setup-nginx.sh --domain www.example.com --port 8000
-```
-
-This configures nginx as a reverse proxy with SSL (via Let's Encrypt).
-
-### 3. Harden Security
-
-Review and adjust the security settings in `security.conf`, then apply:
-
-```bash
-# See what needs fixing
-sudo ./audit-security.sh --domain beta.example.com:8001 --domain www.example.com:8000
-
-# Apply firewall rules, rate limiting, and fail2ban
-sudo ./setup-security.sh --domain beta.example.com:8001 --domain www.example.com:8000
-
-# Verify everything is in place
-sudo ./audit-security.sh --domain beta.example.com:8001 --domain www.example.com:8000
-```
-
-### 4. Development (local machine)
-
-Dev mode exposes the port directly and allows all CORS origins — no nginx needed:
-
-```bash
-# Uses the repo's default branch
-./deploy.sh --project myproduct \
-  --git-url https://github.com/org/myproduct_server.git \
-  --bootstrap-password mybootstrappass \
-  --postgres-password mydbpass \
-  --dev
-
-# Or specify a branch for debugging
-./deploy.sh --project myproduct \
-  --git-url https://github.com/org/myproduct_server.git \
-  --bootstrap-password mybootstrappass \
-  --postgres-password mydbpass \
-  --dev --git-branch fix/login-bug
-
-curl http://localhost:8001/health
-```
-
-
-### Deploying a specific commit
-
-`--git-branch` accepts a **branch, a tag, or a commit SHA** (full or short).
-Omitted, it defaults to `main`.
-
-```bash
-./deploy.sh --project myproduct \
-  --git-url https://github.com/org/myproduct_server.git \
-  --git-branch 4b20e9e \
-  --bootstrap-password <PASS> --postgres-password <PASS>
-```
-
-Branches and tags take a fast `--single-branch` clone. A commit SHA needs the
-full history, so that path clones everything and then checks the commit out
-detached — slower, but it is the only way `git` will resolve a bare SHA.
-
-
-## Managing Deployments
-
-```bash
-# Restart (reads saved config, only needs secrets)
-./restart.sh --project myproduct --git-branch main \
-  --bootstrap-password mybootstrappass \
-  --postgres-password mydbpass \
-  --secret-key <your-saved-key>
-
-# Stop
-./stop.sh --project myproduct --git-branch main
-
-# Stop dev
-./stop.sh --project myproduct --dev
-
-# Fresh database (wipes and recreates)
-./deploy.sh ... --reset
-```
-
-## Optional: conf-driven wrappers
-
-The raw scripts above take every secret and per-env setting on the command line.
-That's flexible but verbose, and it pushes secret handling onto whoever invokes
-them. Three optional wrappers move both concerns into one place:
-
-- **`deploy-conf.sh <conf> <env>`** — wraps `deploy.sh`, reads secrets from
-  [`pass`](https://www.passwordstore.org/), reads per-env settings from a conf file.
-- **`restart-conf.sh <conf> <env>`** — wraps `restart.sh`, same conventions.
-- **`stop-conf.sh <conf> <env>`** — wraps `stop.sh`. **No secrets needed**, so
-  no `pass` dependency.
-
-If you don't want `pass`, ignore these wrappers and call `deploy.sh`/`restart.sh`/
-`stop.sh` directly. The wrappers are opt-in.
-
-### Conf file
-
-A bash-sourced file describing one project and its environments:
-
-```bash
-# myproduct.conf
 PROJECT="myproduct"
-GIT_URL="https://github.com/org/myproduct_server.git"
-
-# Optional. Defaults to $PROJECT.
-# PASS_PREFIX="myproduct"
+GIT_URL="https://github.com/<org>/<server-repo>.git"
+STACK_PREFIX="myprefix"              # names containers and the data dir by env
+PASS_PREFIX="secrets/myproduct"      # defaults to $PROJECT
 
 ENVS=(prod beta dev)
 
-prod_GIT_BRANCH="release"
-prod_PORT="8000"
-prod_ALLOWED_WEBSITES="www.example.com,example.com"
-
-beta_GIT_BRANCH="main"
-beta_PORT="8001"
-beta_ALLOWED_WEBSITES="beta.example.com"
-
-# dev: all settings optional. deploy.sh defaults port to 8001 and CORS to *.
-# dev_GIT_BRANCH=""    # set to debug a specific branch; empty = repo default
-# dev_PORT=""
-# dev_ALLOWED_WEBSITES=""
+prod_GIT_BRANCH="release"     ; prod_PORT="9001" ; prod_ALLOWED_WEBSITES="example.com,www.example.com"
+beta_GIT_BRANCH="beta_release"; beta_PORT="9002" ; beta_ALLOWED_WEBSITES="beta.example.com"
+dev_GIT_BRANCH="main"         ; dev_PORT="8001"
 ```
 
-The env name **`dev` is special**: when used, `--dev` is passed to the
-underlying script and `<env>_GIT_BRANCH` / `<env>_PORT` / `<env>_ALLOWED_WEBSITES`
-become optional. Any other env name is treated as server mode and requires all
-three.
+`prod` and `beta` must name a branch. A commit SHA is rejected for anything but
+`dev`.
 
-### Pass key layout
-
-For each env, the wrappers expect these `pass` entries (under `$PASS_PREFIX`,
-which defaults to `$PROJECT`):
-
-| Key | Used by |
-|---|---|
-| `<prefix>/github-token` | `deploy-conf.sh` (shared across envs) |
-| `<prefix>/<env>/bootstrap-password` | `deploy-conf.sh`, `restart-conf.sh` |
-| `<prefix>/<env>/postgres-password` | `deploy-conf.sh`, `restart-conf.sh` |
-| `<prefix>/<env>/secret-key` | `deploy-conf.sh`, `restart-conf.sh` |
-
-Add them once with `pass insert <key>`. The wrappers pre-check all required
-keys and print the exact `pass insert` commands for any that are missing.
-
-### Example
+**3. Add whatever the server needs in its environment**, as
+`<env>_EXTRA_ENV` entries. A value starting with `@` is read from `pass`;
+anything else is a literal. Only variable *names* are written to disk.
 
 ```bash
-./deploy-conf.sh  ./myproduct.conf prod    # build + start production
-./restart-conf.sh ./myproduct.conf beta    # quick restart of beta (no rebuild)
-./stop-conf.sh    ./myproduct.conf dev     # stop dev containers
+_IDENTITY_ENV=(
+    "CLUB_NAME=Example Club"
+    "API_BASE_URL=https://api.example.com"
+)
+_PROD_SECRETS=("ENCRYPTION_KEY=@secrets/myproduct/prod/encryption_key")
+
+prod_EXTRA_ENV=("${_IDENTITY_ENV[@]}" "${_PROD_SECRETS[@]}")
 ```
 
-A typical host repo just contains `myproduct.conf` plus a `justfile` (or
-similar) that wires `just deploy <env>` / `just restart <env>` / `just stop <env>`
-to these wrappers, with this repo added as a git submodule.
-
-## Data Directory Layout
-
-All data lives under `~/.local/share/` — no sudo required:
-
-| Mode | Directory |
-|---|---|
-| Server (`--git-branch main`) | `~/.local/share/server_myproduct_main/` |
-| Server (`--git-branch release`) | `~/.local/share/server_myproduct_release/` |
-| Dev (no branch) | `~/.local/share/server_dev_myproduct/` |
-| Dev (`--git-branch fix/bug`) | `~/.local/share/server_dev_myproduct_fix/bug/` |
-
-Each directory contains:
-```
-db/           # PostgreSQL data files
-uploads/      # User-uploaded files
-static/       # Static assets
-.deploy.env   # Saved deployment config (non-secret)
-```
-
-To back up everything: `cp -r ~/.local/share/server_*myproduct* /your/backup/path/`
-
-## Script Reference
-
-Every script supports `--help` for full usage details.
-
-| Script | Purpose |
-|---|---|
-| `deploy.sh` | Build and deploy a new instance (or redeploy) |
-| `restart.sh` | Restart an existing deployment with saved config |
-| `stop.sh` | Stop containers without removing data |
-| `deploy-conf.sh` | Optional: `deploy.sh` driven by a conf file + `pass` |
-| `restart-conf.sh` | Optional: `restart.sh` driven by a conf file + `pass` |
-| `stop-conf.sh` | Optional: `stop.sh` driven by a conf file (no `pass` needed) |
-| `setup-nginx.sh` | Configure nginx reverse proxy with SSL for a domain |
-| `audit-security.sh` | Check security settings against `security.conf` |
-| `setup-security.sh` | Apply firewall, rate limiting, and fail2ban from `security.conf` |
-
-## Troubleshooting
+**4. Optionally override nginx tuning** — read by `setup-nginx.sh`, taking
+precedence over `security.conf`:
 
 ```bash
-# View container logs
-docker logs myproduct-main-server
-docker logs myproduct-main-postgres
-
-# Check environment variables
-docker exec myproduct-main-server env | grep -E "CORS|ENVIRONMENT|PROJECT"
-
-# Connect to the database
-docker exec -it myproduct-main-postgres psql -U myproduct -d myproduct
-
-# Test nginx config
-sudo nginx -t
-sudo tail -f /var/log/nginx/error.log
-
-# Check SSL renewal
-sudo certbot renew --dry-run
+NGINX_CLIENT_MAX_BODY_SIZE="60M"     # must exceed the server's upload limit
 ```
+
+**5. Have the installer fetch this repo and generate the wrapper.** The wrapper
+must be a script, not a justfile — `just` has no catch-all recipe, so a wrapper
+justfile would need regenerating whenever a recipe is added. Export the two
+variables rather than passing them as `just` assignments, or `./ops --list` is
+parsed as a recipe name:
+
+```bash
+git clone "$HOSTING_SCRIPTS_URL" "$DIR/server_hosting_scripts"
+git -C "$DIR/server_hosting_scripts" checkout "$HOSTING_SCRIPTS_REF"
+
+cat > "$DIR/ops" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export CONF="$DIR/<conf-name>.conf"
+export BACKUP_DIR="$DIR/backup"
+exec just -f "$DIR/server_hosting_scripts/justfile" \
+          -d "$DIR/server_hosting_scripts" "$@"
+EOF
+chmod +x "$DIR/ops"
+```
+
+Clone then checkout — `git clone --branch` rejects a raw commit, so pinning
+would fail.
+
+**6. Required secrets in `pass`**, under `$PASS_PREFIX`:
+
+```
+github-token                          (private server repos only)
+<env>/bootstrap-password
+<env>/postgres-password
+<env>/secret-key
+```
+
+Missing ones are listed by name on the first deploy.
+
+---
+
+## Commands once deployed
+
+Run `./ops` from the deployment directory. `<env>` is any name in `ENVS`.
+
+```bash
+./ops --list                # every recipe
+./ops deploy <env>          # rebuild the image and restart the stack
+./ops restart <env>         # restart using the saved config
+./ops stop <env>            # stop the stack
+./ops reset <env>           # DESTRUCTIVE: empty the database, clear uploads and static
+./ops backup-pass           # back up the pass store and its GPG key material
+```
+
+### Restore
+
+Reads `backup/` in the deployment directory and nothing else — it never
+contacts a backup host, so it needs no credentials for one. Putting an archive
+there is a separate job.
+
+```
+backup/<project>-<stamp>.tar.gz    database archive
+backup/files/static/               static content
+backup/files/uploads/              uploaded media
+```
+
+```bash
+./ops restore-list                  # what is available locally
+./ops restore-dry <env>             # resolve everything, touch nothing
+./ops restore-backup <env>          # newest archive
+./ops restore-backup <env> <stamp>  # a specific one
+```
+
+Restore refuses when the archive's alembic revision does not match the running
+code. Deploy the matching code rather than overriding.
+
+Where media is encrypted at rest, `uploads/` is ciphertext under the **source**
+environment's key. The target environment's `encryption_key` must be a copy of
+it, or the restored media will not decrypt.
+
+### nginx and TLS
+
+Run once per public environment, as root. It generates the vhost and requests a
+certificate; there is no re-install recipe, because certbot rewrites the vhost
+in place and a second run would drop a live site to plain HTTP. To redo it,
+remove the file under `/etc/nginx/sites-available/` first, or pass `--force`.
+
+```bash
+sudo ./setup-nginx.sh --domain <domain> --port <port> --conf <conf-file>
+sudo ./setup-security.sh --domain <domain>:<port>      # ufw, fail2ban, rate limits
+sudo ./audit-security.sh --domain <domain>:<port>      # check without changing
+```
+
+### Not wired into `ops`
+
+`backup-conf.sh`, `restore-conf.sh` and `verify-conf.sh` implement only the
+branch-based container naming and ignore `STACK_PREFIX`, so on a deployment
+that sets it they resolve names that do not exist. Call them directly only if
+your conf omits `STACK_PREFIX`.
