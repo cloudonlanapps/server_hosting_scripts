@@ -99,7 +99,13 @@ chmod +x "$DIR/ops"
 Clone then checkout — `git clone --branch` rejects a raw commit, so pinning
 would fail.
 
-**6. Required secrets in `pass`**, under `$PASS_PREFIX`:
+**6. Copy `project_README_template.md`** into the product's folder as its
+README and replace the placeholders. Keep the prose — every product's README
+should differ only in its values table, so a reader can move between products
+without re-reading, and so one product's instructions cannot be corrected while
+another's rot.
+
+**7. Required secrets in `pass`**, under `$PASS_PREFIX`:
 
 ```
 github-token                          (private server repos only)
