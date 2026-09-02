@@ -208,7 +208,7 @@ UNSET_VALUES=()
 for entry in ${PRODUCT_ENV_COMMON[@]+"${PRODUCT_ENV_COMMON[@]}"}; do
     [ -n "$entry" ] || continue
     name="${entry%%=*}"; val="${entry#*=}"
-    case "$val" in REPLACE_ME|"REPLACE_ME") UNSET_VALUES+=("$name") ;; esac
+    [ "$val" = "REPLACE_ME" ] && UNSET_VALUES+=("$name")
 done
 for e in "${CHOSEN[@]}"; do
     for v in "PRODUCT_${e}_GIT_BRANCH"; do
