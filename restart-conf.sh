@@ -111,7 +111,11 @@ ARGS=(
     --secret-key "$SECRET_KEY"
 )
 
-[ ${#EXTRA_NAMES[@]} -gt 0 ] && ARGS+=(--extra-env-names "${EXTRA_NAMES[*]}")
+# Split by origin: literals are forwarded as environment variables, values that
+# came from `pass` are mounted as secret files. resolve_extra_env made the same
+# distinction already, to validate the store.
+[ ${#EXTRA_PLAIN_NAMES[@]} -gt 0 ] && ARGS+=(--extra-env-names "${EXTRA_PLAIN_NAMES[*]}")
+[ ${#EXTRA_SECRET_NAMES[@]} -gt 0 ] && ARGS+=(--extra-secret-env-names "${EXTRA_SECRET_NAMES[*]}")
 [ "$ENV" = "dev" ] && ARGS+=(--dev)
 [ -n "$GIT_BRANCH" ] && ARGS+=(--git-branch "$GIT_BRANCH")
 [ -n "$STACK_NAME" ] && ARGS+=(--stack-name "$STACK_NAME")

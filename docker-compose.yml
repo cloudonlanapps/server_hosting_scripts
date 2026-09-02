@@ -6,7 +6,11 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # The postgres image reads the password from a file when given _FILE, so
+      # it never appears in this container's environment.
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
     volumes:
       - ${DATA_DIR}/db:/var/lib/postgresql/data
     # No external port - only accessible within Docker network
@@ -30,18 +34,30 @@ services:
         - gh_token
     container_name: ${SERVER_CONTAINER_NAME}
     restart: unless-stopped
+    # Secrets are tmpfs files under /run/secrets, not environment entries, so
+    # they are absent from `docker inspect`, from /proc/<pid>/environ and from
+    # the compose config dump — all readable by anyone in the `docker` group,
+    # which on a single-tenant host is close to root.
+    #
+    # Names are lowercase because pydantic-settings matches a secret file to a
+    # settings field by name, and fields are lowercase. database_url is mounted
+    # whole rather than assembled from parts: the URL interpolates the password,
+    # so it cannot stay a compose string once the password is a file, and the
+    # application reads `database_url` from the secrets dir with no code change.
+    secrets:
+      - database_url
+      - secret_key
+      - bootstrap_password
+      - postgres_password
     environment:
-      # Database connection
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      # Database connection — non-secret parts only; the URL and the password
+      # arrive as secrets above.
       POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
       # App configuration
       PROJECT_NAME: ${PROJECT_NAME}
       # Python package installed in the image; defaults to PROJECT_NAME.
       PACKAGE_NAME: ${PACKAGE_NAME:-}
-      SECRET_KEY: ${SECRET_KEY}
-      BOOTSTRAP_PASSWORD: ${BOOTSTRAP_PASSWORD}
       ENVIRONMENT: ${ENVIRONMENT:-production}
       UPLOAD_DIR: /data/uploads
       STATIC_DIR: /data/static
@@ -66,3 +82,15 @@ secrets:
   gh_token:
     # Read from the environment deploy.sh already exports; never written to disk.
     environment: GITHUB_TOKEN
+  # Runtime secrets, same mechanism: compose reads each from the deploying
+  # process's environment and materialises it as a tmpfs file in the container.
+  # The value is never written to disk on the host and never enters the
+  # container's environment.
+  database_url:
+    environment: DATABASE_URL
+  secret_key:
+    environment: SECRET_KEY
+  bootstrap_password:
+    environment: BOOTSTRAP_PASSWORD
+  postgres_password:
+    environment: POSTGRES_PASSWORD

@@ -57,6 +57,20 @@ dev_GIT_BRANCH="main"         ; dev_PORT="8001"
 `<env>_EXTRA_ENV` entries. A value starting with `@` is read from `pass`;
 anything else is a literal. Only variable *names* are written to disk.
 
+The `@` is also the routing rule. A literal is passed to the container as an
+environment variable. A `pass`-sourced value is mounted as a **Docker secret** —
+a tmpfs file at `/run/secrets/<lowercased name>` — so it appears in neither
+`docker inspect`, `/proc/<pid>/environ`, nor the compose config dump, all of
+which are readable by anyone in the `docker` group. The application picks these
+up by pointing `pydantic-settings` at `secrets_dir="/run/secrets"`, which
+matches a file to a settings field by name.
+
+The same applies to the values this tooling supplies itself: the database URL,
+the secret key, the bootstrap password and the postgres password are all
+mounted rather than exported. Postgres reads its own via `POSTGRES_PASSWORD_FILE`.
+Where a secret file is absent the environment is still honoured, so a
+deployment can move one value at a time.
+
 ```bash
 _IDENTITY_ENV=(
     "CLUB_NAME=Example Club"

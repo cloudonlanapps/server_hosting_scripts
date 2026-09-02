@@ -12,6 +12,34 @@ fi
 # PROJECT_NAME, so existing deployments are unaffected.
 PACKAGE_NAME="${PACKAGE_NAME:-$PROJECT_NAME}"
 
+# Secrets arrive as tmpfs files under /run/secrets rather than as environment
+# entries, so they stay out of `docker inspect` and /proc/<pid>/environ. The
+# application reads its own settings straight from that directory; the two
+# values below are needed by this script, so read them here.
+#
+# The environment is still honoured when a secret file is absent, so a
+# deployment can move one value at a time instead of all at once.
+read_secret() {
+    local name="$1" file="/run/secrets/$1"
+    if [ -r "$file" ]; then
+        cat "$file"
+    else
+        eval "printf '%s' \"\${${name^^}:-}\""
+    fi
+}
+
+POSTGRES_PASSWORD="$(read_secret postgres_password)"
+BOOTSTRAP_PASSWORD="$(read_secret bootstrap_password)"
+
+if [ -z "$POSTGRES_PASSWORD" ]; then
+    echo "ERROR: no postgres password: /run/secrets/postgres_password is absent and POSTGRES_PASSWORD is unset"
+    exit 1
+fi
+if [ -z "$BOOTSTRAP_PASSWORD" ]; then
+    echo "ERROR: no bootstrap password: /run/secrets/bootstrap_password is absent and BOOTSTRAP_PASSWORD is unset"
+    exit 1
+fi
+
 echo "==> Waiting for PostgreSQL to be ready..."
 
 # Wait for PostgreSQL to accept connections
@@ -36,6 +64,12 @@ echo "    PostgreSQL is ready."
 echo "==> Running database migrations..."
 uv run --frozen --no-dev alembic upgrade head
 
+# The password is still passed as an argument, so it is visible in this
+# container's own /proc/<pid>/cmdline for the life of the command. That is a
+# narrower exposure than the environment (which persisted for the life of the
+# container and was readable via `docker inspect` from the host), but it is not
+# nothing; closing it needs the bootstrap command to accept the value another
+# way, which is an application change.
 echo "==> Bootstrapping sudo user..."
 uv run --frozen --no-dev ${PACKAGE_NAME}_bootstrap "$BOOTSTRAP_PASSWORD"
 

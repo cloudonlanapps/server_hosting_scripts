@@ -119,6 +119,7 @@ CUSTOM_DATA_DIR=""
 CUSTOM_PORT=""
 ALLOWED_WEBSITES=""
 EXTRA_ENV_NAMES=""
+EXTRA_SECRET_ENV_NAMES=""
 
 # Parse arguments
 while [ $# -gt 0 ]; do
@@ -237,6 +238,15 @@ while [ $# -gt 0 ]; do
             ;;
         --extra-env-names=*)
             EXTRA_ENV_NAMES="${1#*=}"
+            ;;
+        # Names whose values came from `pass`. These are mounted as secret
+        # files rather than passed as environment entries.
+        --extra-secret-env-names)
+            shift
+            EXTRA_SECRET_ENV_NAMES="$1"
+            ;;
+        --extra-secret-env-names=*)
+            EXTRA_SECRET_ENV_NAMES="${1#*=}"
             ;;
         *)
             echo "ERROR: Unknown option: $1"
@@ -431,6 +441,12 @@ export POSTGRES_USER
 export POSTGRES_PASSWORD
 export SECRET_KEY
 export BOOTSTRAP_PASSWORD
+# Assembled here rather than interpolated in the compose file: the password is
+# a mounted secret now, so it is no longer available to compose as a variable.
+# The whole URL is mounted as one secret, which the application reads straight
+# from the secrets dir with no code change.
+DATABASE_URL="postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}"
+export DATABASE_URL
 export DATA_DIR
 export SERVER_PORT
 export RESET_DB
@@ -446,10 +462,10 @@ export REPO_BRANCH
 # value is written to disk.
 COMPOSE_FILES=(-f docker-compose.yml)
 OVERRIDE_FILE="$DATA_DIR/docker-compose.override.yml"
-# shellcheck disable=SC2086
-write_extra_env_override "$OVERRIDE_FILE" $EXTRA_ENV_NAMES
-if [ -n "$EXTRA_ENV_NAMES" ]; then
-    echo "==> Extra env passed to container: $EXTRA_ENV_NAMES"
+write_extra_env_override "$OVERRIDE_FILE" "$EXTRA_ENV_NAMES" "$EXTRA_SECRET_ENV_NAMES"
+if [ -n "$EXTRA_ENV_NAMES$EXTRA_SECRET_ENV_NAMES" ]; then
+    [ -n "$EXTRA_ENV_NAMES" ] && echo "==> Extra env passed to container: $EXTRA_ENV_NAMES"
+    [ -n "$EXTRA_SECRET_ENV_NAMES" ] && echo "==> Extra secrets mounted in container: $EXTRA_SECRET_ENV_NAMES"
     COMPOSE_FILES+=(-f "$OVERRIDE_FILE")
 fi
 

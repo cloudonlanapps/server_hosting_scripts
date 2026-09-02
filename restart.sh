@@ -54,6 +54,7 @@ DEV_MODE=false
 GIT_BRANCH=""
 STACK_NAME=""
 EXTRA_ENV_NAMES=""
+EXTRA_SECRET_ENV_NAMES=""
 
 # shellcheck source=lib_extra_env.sh
 source "./lib_extra_env.sh"
@@ -116,6 +117,15 @@ while [ $# -gt 0 ]; do
             ;;
         --extra-env-names=*)
             EXTRA_ENV_NAMES="${1#*=}"
+            ;;
+        # Names whose values came from `pass`. These are mounted as secret
+        # files rather than passed as environment entries.
+        --extra-secret-env-names)
+            shift
+            EXTRA_SECRET_ENV_NAMES="$1"
+            ;;
+        --extra-secret-env-names=*)
+            EXTRA_SECRET_ENV_NAMES="${1#*=}"
             ;;
         *)
             echo "ERROR: Unknown option: $1"
@@ -192,6 +202,10 @@ export POSTGRES_USER="$PROJECT_NAME"
 export POSTGRES_DB="$PROJECT_NAME"
 export SECRET_KEY
 export BOOTSTRAP_PASSWORD
+# Assembled here for the same reason as in deploy.sh: the password is a mounted
+# secret now, so compose can no longer interpolate it into the URL.
+DATABASE_URL="postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}"
+export DATABASE_URL
 export DATA_DIR
 export SERVER_PORT
 export COMPOSE_PROJECT_NAME
@@ -207,9 +221,8 @@ export ENVIRONMENT
 # inherited here). Emit the names-only override so compose forwards them.
 COMPOSE_FILES=(-f docker-compose.yml)
 OVERRIDE_FILE="$DATA_DIR/docker-compose.override.yml"
-# shellcheck disable=SC2086
-write_extra_env_override "$OVERRIDE_FILE" $EXTRA_ENV_NAMES
-[ -n "$EXTRA_ENV_NAMES" ] && COMPOSE_FILES+=(-f "$OVERRIDE_FILE")
+write_extra_env_override "$OVERRIDE_FILE" "$EXTRA_ENV_NAMES" "$EXTRA_SECRET_ENV_NAMES"
+[ -n "$EXTRA_ENV_NAMES$EXTRA_SECRET_ENV_NAMES" ] && COMPOSE_FILES+=(-f "$OVERRIDE_FILE")
 
 echo "==> Port: $PORT"
 echo "    Data directory: $DATA_DIR"
