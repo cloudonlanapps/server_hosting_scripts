@@ -1,0 +1,299 @@
+#!/bin/bash
+set -e
+
+# Run from the script's own directory so docker-compose.yml resolves.
+cd "$(dirname "$0")"
+
+# Usage: ./restart.sh --project NAME --bootstrap-password PASS --postgres-password PASS --secret-key KEY [options]
+#
+# Reads non-secret deployment config from $DATA_DIR/.deploy.env (saved by deploy.sh).
+# Only secrets must be provided on the command line.
+#
+# Required:
+#   --project NAME              Project name (used to find data directory and config)
+#   --bootstrap-password PASS   Password for the bootstrap admin user (can be changed on each run)
+#   --postgres-password PASS    Database password (must match existing database)
+#   --secret-key KEY            JWT signing key (changing it invalidates existing user sessions)
+#
+# Options:
+#   --git-branch BRANCH         Git branch (required in server mode, not used in dev mode). Used to locate the deployment config.
+#   --dev                       Restart development containers
+
+show_usage() {
+    echo "Usage: ./restart.sh --project NAME --bootstrap-password PASS --postgres-password PASS --secret-key KEY [options]"
+    echo ""
+    echo "Reads deployment config (port, data-dir, allowed-websites, etc.) from"
+    echo "the .deploy.env file saved by deploy.sh. Only secrets are needed here."
+    echo ""
+    echo "Required:"
+    echo "  --project NAME              Project name (used to find data directory and config)"
+    echo "  --bootstrap-password PASS   Password for the bootstrap admin user (can be changed on each run)"
+    echo "  --postgres-password PASS    Database password (must match existing database)"
+    echo "  --secret-key KEY            JWT signing key (changing it invalidates existing user sessions)"
+    echo ""
+    echo "Options:"
+    echo "  --git-branch BRANCH         Git branch (required in server mode, not used in dev mode). Used to locate the deployment config."
+    echo "  --dev                       Restart development containers"
+    echo ""
+    echo "Examples:"
+    echo "  # Restart main branch (default):"
+    echo "  ./restart.sh --project myproduct --bootstrap-password pass123 --postgres-password dbpass123 --secret-key KEY"
+    echo ""
+    echo "  # Restart release branch:"
+    echo "  ./restart.sh --project myproduct --bootstrap-password pass123 --postgres-password dbpass123 --secret-key KEY --git-branch release"
+    echo ""
+    echo "  # Restart dev:"
+    echo "  ./restart.sh --project myproduct --bootstrap-password pass123 --postgres-password dbpass123 --secret-key KEY --dev"
+}
+
+PROJECT_NAME=""
+BOOTSTRAP_PASSWORD=""
+POSTGRES_PASSWORD=""
+SECRET_KEY=""
+DEV_MODE=false
+GIT_BRANCH=""
+STACK_NAME=""
+EXTRA_ENV_NAMES=""
+EXTRA_SECRET_ENV_NAMES=""
+
+# shellcheck source=lib_extra_env.sh
+source "./lib_extra_env.sh"
+
+# Parse arguments
+while [ $# -gt 0 ]; do
+    case $1 in
+        --help|-h)
+            show_usage
+            exit 0
+            ;;
+        --project)
+            shift
+            PROJECT_NAME="$1"
+            ;;
+        --project=*)
+            PROJECT_NAME="${1#*=}"
+            ;;
+        --bootstrap-password)
+            shift
+            BOOTSTRAP_PASSWORD="$1"
+            ;;
+        --bootstrap-password=*)
+            BOOTSTRAP_PASSWORD="${1#*=}"
+            ;;
+        --postgres-password)
+            shift
+            POSTGRES_PASSWORD="$1"
+            ;;
+        --postgres-password=*)
+            POSTGRES_PASSWORD="${1#*=}"
+            ;;
+        --secret-key)
+            shift
+            SECRET_KEY="$1"
+            ;;
+        --secret-key=*)
+            SECRET_KEY="${1#*=}"
+            ;;
+        --dev)
+            DEV_MODE=true
+            ;;
+        --git-branch)
+            shift
+            GIT_BRANCH="$1"
+            ;;
+        --stack-name)
+            shift
+            STACK_NAME="$1"
+            ;;
+        --stack-name=*)
+            STACK_NAME="${1#*=}"
+            ;;
+        --git-branch=*)
+            GIT_BRANCH="${1#*=}"
+            ;;
+        --extra-env-names)
+            shift
+            EXTRA_ENV_NAMES="$1"
+            ;;
+        --extra-env-names=*)
+            EXTRA_ENV_NAMES="${1#*=}"
+            ;;
+        # Names whose values came from `pass`. These are mounted as secret
+        # files rather than passed as environment entries.
+        --extra-secret-env-names)
+            shift
+            EXTRA_SECRET_ENV_NAMES="$1"
+            ;;
+        --extra-secret-env-names=*)
+            EXTRA_SECRET_ENV_NAMES="${1#*=}"
+            ;;
+        *)
+            echo "ERROR: Unknown option: $1"
+            show_usage
+            exit 1
+            ;;
+    esac
+    shift
+done
+
+# Validate required arguments
+if [ -z "$PROJECT_NAME" ] || [ -z "$BOOTSTRAP_PASSWORD" ] || [ -z "$POSTGRES_PASSWORD" ] || [ -z "$SECRET_KEY" ]; then
+    echo "ERROR: --project, --bootstrap-password, --postgres-password, and --secret-key are required"
+    show_usage
+    exit 1
+fi
+
+# Server mode requires --git-branch
+if [ "$DEV_MODE" = false ] && [ -z "$GIT_BRANCH" ]; then
+    echo "ERROR: --git-branch is required in server mode (e.g., --git-branch main, --git-branch release)"
+    echo "  Use --dev for development mode"
+    exit 1
+fi
+
+# Determine data directory to find config file
+DATA_BASE="${HOME}/.local/share"
+if [ "$DEV_MODE" = true ]; then
+    if [ -n "$GIT_BRANCH" ]; then
+        DEFAULT_DATA_DIR="${DATA_BASE}/server_dev_${PROJECT_NAME}_${GIT_BRANCH}"
+    else
+        DEFAULT_DATA_DIR="${DATA_BASE}/server_dev_${PROJECT_NAME}"
+    fi
+else
+    DEFAULT_DATA_DIR="${DATA_BASE}/server_${PROJECT_NAME}_${GIT_BRANCH}"
+fi
+# --stack-name names the data dir directly; see deploy.sh for why the default
+# derives it from the branch instead.
+[ -n "$STACK_NAME" ] && DEFAULT_DATA_DIR="${DATA_BASE}/${STACK_NAME}"
+
+# Load deployment config saved by deploy.sh
+DEPLOY_CONFIG="$DEFAULT_DATA_DIR/.deploy.env"
+if [ ! -f "$DEPLOY_CONFIG" ]; then
+    echo "ERROR: Deployment config not found: $DEPLOY_CONFIG"
+    echo "Run deploy.sh first to create the initial deployment."
+    exit 1
+fi
+
+echo "==> Loading deployment config from $DEPLOY_CONFIG..."
+source "$DEPLOY_CONFIG"
+
+# Build CORS origins from saved ALLOWED_WEBSITES
+if [ "$DEV_MODE" = true ]; then
+    CORS_ALLOWED_ORIGINS="*"
+else
+    CORS_ALLOWED_ORIGINS=$(echo "$ALLOWED_WEBSITES" | tr ',' '\n' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' | sed 's|^|https://|' | tr '\n' ',' | sed 's/,$//')
+fi
+
+echo "==> Restarting: branch=$GIT_BRANCH, port=$PORT"
+
+# Determine port binding
+if [ "$DEV_MODE" = true ]; then
+    SERVER_PORT="${PORT}:8000"
+else
+    SERVER_PORT="127.0.0.1:${PORT}:8000"
+fi
+
+# Export environment variables for docker-compose.
+# PACKAGE_NAME is passed through as-is, empty included: an empty value is what
+# lets entrypoint.sh derive it from the application's pyproject.toml. Defaulting
+# it to PROJECT_NAME here would silently prevent that.
+PACKAGE_NAME="${PACKAGE_NAME:-}"
+export PROJECT_NAME
+export PACKAGE_NAME
+export GIT_URL
+export POSTGRES_PASSWORD
+export POSTGRES_USER="$PROJECT_NAME"
+export POSTGRES_DB="$PROJECT_NAME"
+export SECRET_KEY
+export BOOTSTRAP_PASSWORD
+# Assembled here for the same reason as in deploy.sh: the password is a mounted
+# secret now, so compose can no longer interpolate it into the URL.
+DATABASE_URL="postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}"
+export DATABASE_URL
+export DATA_DIR
+export SERVER_PORT
+export COMPOSE_PROJECT_NAME
+# Container names come from .deploy.env for stacks deployed with --stack-name;
+# older deployments predate those keys, so fall back to the compose default.
+DB_CONTAINER_NAME="${DB_CONTAINER_NAME:-${COMPOSE_PROJECT_NAME}-postgres}"
+SERVER_CONTAINER_NAME="${SERVER_CONTAINER_NAME:-${COMPOSE_PROJECT_NAME}-server}"
+export DB_CONTAINER_NAME SERVER_CONTAINER_NAME
+export CORS_ALLOWED_ORIGINS
+export ENVIRONMENT
+
+# Generic extra-env passthrough (values already exported by restart-conf.sh and
+# inherited here). Emit the names-only override so compose forwards them.
+COMPOSE_FILES=(-f docker-compose.yml)
+OVERRIDE_FILE="$DATA_DIR/docker-compose.override.yml"
+write_extra_env_override "$OVERRIDE_FILE" "$EXTRA_ENV_NAMES" "$EXTRA_SECRET_ENV_NAMES"
+[ -n "$EXTRA_ENV_NAMES$EXTRA_SECRET_ENV_NAMES" ] && COMPOSE_FILES+=(-f "$OVERRIDE_FILE")
+
+echo "==> Port: $PORT"
+echo "    Data directory: $DATA_DIR"
+echo "    Project name: $COMPOSE_PROJECT_NAME"
+
+echo "==> Restarting containers..."
+docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILES[@]}" up -d
+
+# Function to wait for containers to become healthy
+wait_for_healthy() {
+    local timeout=${1:-90}
+    local interval=${2:-3}
+    local start_time=$(date +%s)
+    local elapsed=0
+
+    local db_container="$DB_CONTAINER_NAME"
+    local server_container="$SERVER_CONTAINER_NAME"
+
+    echo "==> Waiting for services to become healthy (timeout: ${timeout}s)..."
+
+    while [ $elapsed -lt $timeout ]; do
+        local db_health=$(docker inspect --format='{{.State.Health.Status}}' "$db_container" 2>/dev/null || echo "unknown")
+        local server_health=$(docker inspect --format='{{.State.Health.Status}}' "$server_container" 2>/dev/null || echo "unknown")
+        local server_running=$(docker inspect --format='{{.State.Running}}' "$server_container" 2>/dev/null || echo "false")
+
+        if [ "$server_running" = "false" ]; then
+            echo ""
+            echo "ERROR: Server container is not running"
+            docker compose -p "$COMPOSE_PROJECT_NAME" logs --tail=20 server
+            return 1
+        fi
+
+        if [ "$server_health" = "unhealthy" ]; then
+            echo ""
+            echo "ERROR: Server container is unhealthy"
+            docker compose -p "$COMPOSE_PROJECT_NAME" logs --tail=20 server
+            return 1
+        fi
+
+        printf "\r  [%3ds] db: %-10s | server: %-10s" "$elapsed" "$db_health" "$server_health"
+
+        if [ "$db_health" = "healthy" ] && [ "$server_health" = "healthy" ]; then
+            local end_time=$(date +%s)
+            local total_time=$((end_time - start_time))
+            echo ""
+            echo "==> All services healthy! (took ${total_time}s)"
+            return 0
+        fi
+
+        sleep $interval
+        elapsed=$(( $(date +%s) - start_time ))
+    done
+
+    echo ""
+    echo "ERROR: Timeout waiting for services to become healthy"
+    echo "Current status:"
+    docker compose -p "$COMPOSE_PROJECT_NAME" ps
+    echo ""
+    echo "Server logs:"
+    docker compose -p "$COMPOSE_PROJECT_NAME" logs --tail=50 server
+    return 1
+}
+
+# Wait for containers to become healthy
+if ! wait_for_healthy 90 3; then
+    exit 1
+fi
+
+echo ""
+echo "Services:"
+docker compose -p "$COMPOSE_PROJECT_NAME" ps
