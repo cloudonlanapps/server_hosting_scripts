@@ -32,8 +32,38 @@ for beta.
 
 ## How to write an installer for a new product
 
-An installer is one shipped file. It writes a conf, fetches this repo at a
-chosen ref, and generates its justfile.
+An installer has two parts: a **product defaults file** holding every product
+decision, and a shipped script whose only jobs are to carry that file, fetch
+this repo at a pinned ref, and hand both to `setup-conf.sh`.
+
+`setup-conf.sh` owns the conf. It rewrites the file in full on every run that
+writes, so nothing in it is hand-edited; what survives a reconfigure is the
+answers, because the existing conf is sourced first and each value becomes the
+default for the prompt that regenerates it. A setting the product file gained
+since falls through to its product default and becomes a new question, which is
+what stops a new setting from silently missing an existing deployment.
+
+**This repo holds no defaults.** It knows a conf's shape — which variables must
+exist, which are per-environment — and nothing about their values. A required
+value the product file does not declare is a hard error naming the variable.
+
+Two things are asked, because only two are decided per machine: which
+environments this host serves, and the port for each. Everything else is a
+product decision written straight through, a secret derived from `PASS_PREFIX`,
+or an unfilled value that stops the install.
+
+Whether a run reconfigures is decided by the server's own `VERSION`, fetched
+from git and compared against the `CONF_SCHEMA_VERSION` stamped into the conf.
+Same major.minor, there is nothing to ask. Different, it asks again. The server
+repo is what makes a setting mandatory, so it is what declares the version.
+
+### The older, single-file form
+
+An installer used to be one shipped file that wrote the conf itself with a
+heredoc. That form still works — the conf format has not changed — but it is
+what `setup-conf.sh` exists to replace: a conf written once and hand-edited
+afterwards cannot receive a new setting, and a regenerated one silently
+discards hand-filled values.
 
 **1. Choose values that do not collide with existing deployments:** a
 `PROJECT` name, a `PASS_PREFIX`, and one port per environment.
