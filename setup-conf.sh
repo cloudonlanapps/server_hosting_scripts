@@ -37,6 +37,8 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 DEFAULTS_FILE=""
 DIR=""
 FORCE_UPGRADE=0
@@ -516,8 +518,36 @@ cat <<EOF
 
     conf    $CONF   (schema $TARGET_VERSION)
     envs    ${CHOSEN[*]}
-
-Next:
-    cd $DIR
-    just deploy ${CHOSEN[0]}
 EOF
+
+# Offer to deploy. Configuring writes files; deploying builds an image and
+# starts containers, so it is asked per environment and never assumed. Under
+# --yes nothing is deployed: a scripted run should not start a server as a side
+# effect of being configured.
+DEPLOYED=()
+if [ "$ASSUME_YES" != 1 ] && tty_ok; then
+    echo > /dev/tty
+    for e in "${CHOSEN[@]}"; do
+        printf 'Deploy %s now? [Y/n]: ' "${ENV_LABEL[$e]:-$e}" > /dev/tty
+        read -r _go < /dev/tty || true
+        case "${_go:-Y}" in
+            [nN]*) ;;
+            *) DEPLOYED+=("$e") ;;
+        esac
+    done
+fi
+
+for e in ${DEPLOYED[@]+"${DEPLOYED[@]}"}; do
+    echo
+    echo "==> Deploying ${ENV_LABEL[$e]:-$e}"
+    ( cd "$DIR" && "$SCRIPT_DIR/deploy-conf.sh" "$CONF" "$e" )
+done
+
+if [ ${#DEPLOYED[@]} -eq 0 ]; then
+    cat <<EOF
+
+To deploy:
+    cd $DIR
+$(for e in "${CHOSEN[@]}"; do echo "    just deploy $e"; done)
+EOF
+fi
