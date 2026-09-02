@@ -219,10 +219,15 @@ in place and a second run would drop a live site to plain HTTP. To redo it,
 remove the file under `/etc/nginx/sites-available/` first, or pass `--force`.
 
 ```bash
-sudo ./setup-nginx.sh --domain <domain> --port <port> --conf <conf-file>
+sudo ./setup-nginx-conf.sh <conf-file> <env>           # resolves domain + port
 sudo ./setup-security.sh --domain <domain>:<port>      # ufw, fail2ban, rate limits
 sudo ./audit-security.sh --domain <domain>:<port>      # check without changing
 ```
+
+`setup-nginx-conf.sh` takes the same `(conf, env)` pair as `deploy-conf.sh` and
+the rest: it reads the environment's port and its first allowed domain from the
+conf, confirms them, and calls `setup-nginx.sh`. Call that one directly only if
+you are configuring a domain the conf does not name.
 
 ### Not wired into the justfile
 
