@@ -81,12 +81,14 @@ env_labels() {  # env_labels "prod dev" -> "PRODUCTION DEVELOPMENT"
     printf '%s' "${out[*]}"
 }
 
-env_from_label() {  # accepts either form, in any case
-    local want e
-    want="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+# Exact match on the long name, case and all. Not a nicety withheld: typing
+# PRODUCTION in full is the moment to notice you did not mean to, and accepting
+# "prod" or "Dev" would let the most consequential answer in the run be given by
+# reflex.
+env_from_label() {
+    local e
     for e in "${KNOWN_ENVS[@]}"; do
-        [ "$want" = "$e" ] && { printf '%s' "$e"; return 0; }
-        [ "$want" = "$(printf '%s' "${ENV_LABEL[$e]}" | tr '[:upper:]' '[:lower:]')" ] && { printf '%s' "$e"; return 0; }
+        [ "$1" = "${ENV_LABEL[$e]}" ] && { printf '%s' "$e"; return 0; }
     done
     return 1
 }
@@ -226,7 +228,7 @@ vminor() { printf '%s' "$1" | cut -d. -f1-2; }
 # and see whether it differs from the conf on disk.
 declare -A OLD_PORT
 resolve_answers() {
-    local ask_them="$1" e k pv dv known
+    local ask_them="$1" e pv _v
 
     # On a re-run the current conf is the default; on a fresh install the
     # product says which environments a new host serves. Not defaulted here:
@@ -247,11 +249,23 @@ resolve_answers() {
         SELECTED_ENVS="${_answer:-$_default}"
     fi
 
+    # A typed answer is matched against the long names only. A value that was
+    # not typed — carried over from an existing conf, or the fresh-install
+    # default — is already an internal name and is checked as one.
     CHOSEN=()
+    local k _valid
     for e in $SELECTED_ENVS; do
-        k="$(env_from_label "$e")" || {
-            local _valid; _valid="$(env_labels "${KNOWN_ENVS[*]}")"
-            echo "ERROR: '$e' is not an environment (${_valid// / | })" >&2; exit 1; }
+        if [ "$ask_them" = 1 ]; then
+            k="$(env_from_label "$e")" || {
+                _valid="$(env_labels "${KNOWN_ENVS[*]}")"
+                echo "ERROR: '$e' is not an environment. Type one of: ${_valid// / | }" >&2
+                echo "       Exactly as shown, in capitals." >&2
+                exit 1; }
+        else
+            k=""
+            for _v in "${KNOWN_ENVS[@]}"; do [ "$e" = "$_v" ] && k="$e"; done
+            [ -n "$k" ] || { echo "ERROR: '$e' is not an environment (${KNOWN_ENVS[*]})" >&2; exit 1; }
+        fi
         CHOSEN+=("$k")
     done
     [ ${#CHOSEN[@]} -gt 0 ] || { echo "ERROR: no environments selected" >&2; exit 1; }
