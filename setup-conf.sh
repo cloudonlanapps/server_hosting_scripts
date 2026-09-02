@@ -120,15 +120,20 @@ declare -A PC          # "section.key" -> value
 declare -A PC_KEYS     # "section"     -> space-separated keys, in file order
 
 parse_product_conf() {
-    local file="$1" section="" line key value
+    local file="$1" section="" line key value _t
     while IFS= read -r line || [ -n "$line" ]; do
         line="${line%$'\r'}"
-        case "$line" in
+        # Leading whitespace is not meaningful, and a value may legitimately
+        # start with '#' — a colour, for one — so a line is only a comment when
+        # the FIRST non-blank character is '#' or ';'.
+        _t="${line#"${line%%[![:space:]]*}"}"
+        case "$_t" in
             ''|'#'*|';'*) continue ;;
             '['*']')
-                section="${line#[}"; section="${section%]}"
+                section="${_t#[}"; section="${section%]}"
                 continue ;;
         esac
+        line="$_t"
         [ -n "$section" ] || { echo "ERROR: $file: '$line' appears before any [section]" >&2; exit 1; }
         case "$line" in
             *=*) ;;
@@ -176,7 +181,6 @@ parse_product_conf "$DEFAULTS_FILE"
 
 PRODUCT_PROJECT="$(pc product project)"
 PRODUCT_GIT_URL="$(pc product git_url)"
-PRODUCT_GITHUB_TOKEN="$(pc product github_token)"
 PRODUCT_STACK_PREFIX="$(pc product company_id '')"
 
 # Derived, not declared: repeating them in every product config would be two
@@ -217,7 +221,7 @@ ask() {  # ask VAR "Prompt" — the current value of VAR is the default
 # Fetched, never assumed. A failed fetch that fell through to "no upgrade
 # needed" would reproduce exactly the silence this mechanism exists to remove,
 # so it is fatal.
-fetch_server_version() {
+fetch_server_version() {  # <git-url> <ref> <token-pass-path>
     local url="$1" ref="${2:-main}" owner_repo token api out
     owner_repo="$(printf '%s' "$url" | sed -E 's#^https?://github\.com/##; s#\.git$##')"
     case "$owner_repo" in
@@ -225,7 +229,7 @@ fetch_server_version() {
         *) echo "ERROR: cannot read owner/repo from GIT_URL: $url" >&2; return 1 ;;
     esac
     api="https://api.github.com/repos/${owner_repo}/contents/VERSION?ref=${ref}"
-    token="$(pass show "$(pass_of "$PRODUCT_GITHUB_TOKEN")" 2>/dev/null | head -1 || true)"
+    token="$(pass show "$(pass_of "$3")" 2>/dev/null | head -1 || true)"
     if [ -n "$token" ]; then
         out="$(curl -fsSL -H "Authorization: Bearer $token" \
                     -H "Accept: application/vnd.github.raw" "$api" 2>/dev/null || true)"
@@ -349,7 +353,7 @@ render_conf() {
     echo
     echo "PROJECT=\"$PRODUCT_PROJECT\""
     echo "GIT_URL=\"$PRODUCT_GIT_URL\""
-    echo "GITHUB_TOKEN_PASS=\"$(pass_of "$PRODUCT_GITHUB_TOKEN")\""
+
     [ -n "${PRODUCT_STACK_PREFIX:-}" ] && echo "STACK_PREFIX=\"$PRODUCT_STACK_PREFIX\""
     # nginx caps the whole request, which is the file plus its multipart
     # envelope, so it sits a little above the file limit the server enforces.
@@ -368,6 +372,7 @@ render_conf() {
         echo "${e}_BOOTSTRAP_PASSWORD_PASS=\"$(pass_of "$(pc "env.$e" bootstrap_password)")\""
         echo "${e}_POSTGRES_PASSWORD_PASS=\"$(pass_of "$(pc "env.$e" postgres_password)")\""
         echo "${e}_SECRET_KEY_PASS=\"$(pass_of "$(pc "env.$e" secret_key)")\""
+        echo "${e}_GITHUB_TOKEN_PASS=\"$(pass_of "$(pc "env.$e" github_token)")\""
         echo
     done
     echo "# Product identity, email settings and feature flags. A value starting"
@@ -426,11 +431,11 @@ echo "==> Reading the server's config-schema version"
 TARGET_VERSION=""
 for e in "${CHOSEN[@]}"; do
     _ref="$(env_ref "$e")"
-    _v="$(fetch_server_version "$PRODUCT_GIT_URL" "$_ref")" || {
+    _v="$(fetch_server_version "$PRODUCT_GIT_URL" "$_ref" "$(pc "env.$e" github_token)")" || {
         echo "ERROR: could not read VERSION from $PRODUCT_GIT_URL at '$_ref' (${ENV_LABEL[$e]:-$e})" >&2
         echo "       The version decides whether this run must ask you about new" >&2
         echo "       settings, so a failed read is not something to guess past." >&2
-        echo "       Check network access, and that $(pass_of "$PRODUCT_GITHUB_TOKEN")" >&2
+        echo "       Check network access, and that $(pass_of "$(pc "env.$e" github_token)")" >&2
         echo "       is present and still valid for a private repo." >&2
         exit 1
     }

@@ -47,7 +47,13 @@ if [ -z "${ENVS+x}" ] || [ ${#ENVS[@]} -eq 0 ]; then echo "ERROR: $CONF_FILE mus
 ENV_OK=false; for e in "${ENVS[@]}"; do [ "$e" = "$ENV" ] && ENV_OK=true && break; done
 [ "$ENV_OK" = true ] || { echo "ERROR: Unknown target env '$ENV'. Allowed: ${ENVS[*]}"; exit 1; }
 
-PASS_PREFIX="${PASS_PREFIX:-$PROJECT}"
+# Secret paths come from the conf. PASS_PREFIX is the older form and is still
+# honoured, so a conf written before the explicit keys keeps working.
+_sk_pass() {  # _sk_pass <env>
+    local v="${1}_SECRET_KEY_PASS"
+    if [ -n "${!v:-}" ]; then printf '%s' "${!v}"
+    else printf '%s/%s/secret-key' "${PASS_PREFIX:-$PROJECT}" "$1"; fi
+}
 
 manifest_get() { awk -F': *' -v k="$1" '$1==k {print $2; exit}' "$BK/MANIFEST.txt"; }
 SRC_PROJECT="$(manifest_get project)"; SRC_ENV="$(manifest_get env)"; SRC_SCHEMA="$(manifest_get alembic_version)"
@@ -133,8 +139,9 @@ done
 # --- SECRET_KEY mismatch warning (uses LOCAL pass; best-effort) ---
 SK_NOTE=""
 if command -v pass &>/dev/null && [ -n "$SRC_ENV" ]; then
-    if pass show "${PASS_PREFIX}/${SRC_ENV}/secret-key" &>/dev/null && pass show "${PASS_PREFIX}/${ENV}/secret-key" &>/dev/null; then
-        [ "$(pass show "${PASS_PREFIX}/${SRC_ENV}/secret-key")" != "$(pass show "${PASS_PREFIX}/${ENV}/secret-key")" ] \
+    _SRC_SK="$(_sk_pass "$SRC_ENV")"; _DST_SK="$(_sk_pass "$ENV")"
+    if pass show "$_SRC_SK" &>/dev/null && pass show "$_DST_SK" &>/dev/null; then
+        [ "$(pass show "$_SRC_SK")" != "$(pass show "$_DST_SK")" ] \
             && SK_NOTE="WARNING: target secret-key ($ENV) differs from source ($SRC_ENV). Encrypted media will NOT decrypt on $ENV unless redeployed with the source's key."
     else
         SK_NOTE="NOTE: could not compare secret-keys (missing pass entry) — encrypted media may not decrypt if keys differ."

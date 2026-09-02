@@ -19,8 +19,10 @@ set -e
 #
 # Optional:
 #   <env>_BOOTSTRAP_PASSWORD_PASS / _POSTGRES_PASSWORD_PASS / _SECRET_KEY_PASS
-#   GITHUB_TOKEN_PASS    Full pass paths. PASS_PREFIX is the older form and is
-#                        still honoured when these are absent.
+#   <env>_GITHUB_TOKEN_PASS   Full pass paths, per environment — a dev host may
+#                        clone with a different token than production does.
+#                        PASS_PREFIX is the older form, still honoured when
+#                        these are absent.
 #
 # Required pass entries (paths come from the conf):
 #   <prefix>/github-token
@@ -113,7 +115,7 @@ _pp() {  # _pp <conf-var> <legacy-suffix>
 BOOTSTRAP_PASSWORD_PASS="$(_pp "${ENV}_BOOTSTRAP_PASSWORD_PASS" "${ENV}/bootstrap-password")"
 POSTGRES_PASSWORD_PASS="$(_pp "${ENV}_POSTGRES_PASSWORD_PASS" "${ENV}/postgres-password")"
 SECRET_KEY_PASS="$(_pp "${ENV}_SECRET_KEY_PASS" "${ENV}/secret-key")"
-GITHUB_TOKEN_PASS="$(_pp GITHUB_TOKEN_PASS github-token)"
+GITHUB_TOKEN_PASS="$(_pp "${ENV}_GITHUB_TOKEN_PASS" github-token)"
 
 # Check pass is installed
 if ! command -v pass &> /dev/null; then
