@@ -126,7 +126,20 @@ RUN --mount=type=secret,id=gh_token \
             exit 1; \
         fi; \
     fi; \
-    echo "==> Deployed commit: $(git -C /app rev-parse HEAD)" \
+    echo "==> Deployed commit: $(git -C /app rev-parse HEAD)"; \
+    # The clone URL carries the token, and git writes it verbatim into
+    # /app/.git/config, where it survives into the image and every container
+    # started from it. Reset the remote to the plain URL.
+    #
+    # /app/.git itself is kept on purpose: the commit recorded there is the
+    # only record of what a running container was built from, and it was the
+    # sole way to establish what a two-month-old production deployment was
+    # actually serving. Stripping the credential keeps the traceability.
+    git -C /app remote set-url origin "$GIT_URL"; \
+    if git -C /app config --get-regexp '^remote\..*\.url$' | grep -qE '://[^/@[:space:]]+@'; then \
+        echo "ERROR: a credential survives in /app/.git/config"; \
+        exit 1; \
+    fi \
     # Remove git static folder - will be mounted from host
     && rm -rf /app/static
 
