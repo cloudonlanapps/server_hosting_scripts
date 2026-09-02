@@ -142,6 +142,29 @@ parse_product_conf() {
     done < "$file"
 }
 
+# env_ref <env> — what that environment deploys. dev says `ref`, the rest `branch`.
+env_ref() {
+    if [ "$1" = dev ]; then pc "env.$1" ref; else pc "env.$1" branch; fi
+}
+
+# Everything in the config is lowercase. These are the keys the installer reads
+# for itself; anything else in a section is passed to the server, upper-cased,
+# because that is what an environment variable looks like — a translation the
+# config should not have to carry.
+INSTALLER_KEYS=" company_id project git_url pass_prefix branch ref port websites "
+is_server_key() { case "$INSTALLER_KEYS" in *" $1 "*) return 1 ;; *) return 0 ;; esac; }
+env_name() { printf '%s' "$1" | tr '[:lower:]' '[:upper:]'; }
+
+# A pass path is relative to pass_prefix, which is why pass_prefix exists.
+# Leading slash means absolute, for a secret kept outside the product's tree.
+pass_path() {
+    case "$1" in
+        @/*) printf '@%s' "${1#@/}" ;;
+        @*)  printf '@%s/%s' "$PRODUCT_PASS_PREFIX" "${1#@}" ;;
+        *)   printf '%s' "$1" ;;
+    esac
+}
+
 # pc <section> <key> [default] — a missing key with no default is fatal, by name.
 pc() {
     local k="$1.$2"
@@ -157,10 +180,10 @@ pc() {
 parse_product_conf "$DEFAULTS_FILE"
 
 PRODUCT_PROJECT="$(pc product project)"
+PRODUCT_CLUB_NAME="$(pc product club_name)"
 PRODUCT_GIT_URL="$(pc product git_url)"
 PRODUCT_PASS_PREFIX="$(pc product pass_prefix)"
 PRODUCT_STACK_PREFIX="$(pc product company_id '')"
-PRODUCT_MAX_UPLOAD_SIZE="$(pc product max_upload_size '')"
 
 # Derived, not declared: repeating them in every product config would be two
 # more values to get wrong for no decision gained.
@@ -169,7 +192,14 @@ PRODUCT_CONF_NAME="host_${PRODUCT_PROJECT}_server.conf"
 # Every environment must be fully described, so a host cannot select one that
 # turns out to be half-configured.
 for e in "${KNOWN_ENVS[@]}"; do
-    [ -n "${PC[env.$e.ref]+x}" ] || { echo "ERROR: $DEFAULTS_FILE has no [env.$e] ref" >&2; exit 1; }
+    # prod and beta must track a branch so they can move forward; only dev may
+    # be pinned to a tag or a commit, so only dev takes a `ref`.
+    if [ "$e" = dev ]; then
+        [ -n "${PC[env.$e.ref]+x}" ] || { echo "ERROR: $DEFAULTS_FILE has no [env.$e] ref" >&2; exit 1; }
+    else
+        [ -n "${PC[env.$e.branch]+x}" ] || { echo "ERROR: $DEFAULTS_FILE has no [env.$e] branch" >&2; exit 1; }
+        [ -n "${PC[env.$e.ref]+x}" ] && { echo "ERROR: [env.$e] uses 'ref'; only dev may be pinned to a tag or commit. Use 'branch'." >&2; exit 1; }
+    fi
     [ -n "${PC[env.$e.port]+x}" ]   || { echo "ERROR: $DEFAULTS_FILE has no [env.$e] port" >&2; exit 1; }
 done
 
@@ -232,6 +262,7 @@ vminor() { printf '%s' "$1" | cut -d. -f1-2; }
 declare -A OLD_PORT
 resolve_answers() {
     local ask_them="$1" e pv _v
+    MAX_UPLOAD_MB="${MAX_UPLOAD_MB:-}"
 
     # On a re-run the current conf is the default; on a fresh install the
     # product says which environments a new host serves. Not defaulted here:
@@ -284,6 +315,22 @@ resolve_answers() {
         [ -n "${!pv:-}" ] || printf -v "$pv" '%s' "$(pc "env.$e" port)"
         [ "$ask_them" = 1 ] && ask "$pv" "Port for ${ENV_LABEL[$e]:-$e}"   # ask() honours ASSUME_YES
     done
+
+    # One number for both nginx and the server. The server's own default is 50
+    # (a 50 MB video); nginx must not sit below whatever the server accepts, and
+    # two numbers that can disagree is the failure this avoids.
+    MAX_UPLOAD_MB="${MAX_UPLOAD_MB:-${NGINX_CLIENT_MAX_BODY_SIZE:-}}"; MAX_UPLOAD_MB="${MAX_UPLOAD_MB%M}"
+    MAX_UPLOAD_MB="${MAX_UPLOAD_MB:-50}"
+    if [ "$ask_them" = 1 ]; then
+        ask MAX_UPLOAD_MB "Maximum upload size in MB"
+        case "$MAX_UPLOAD_MB" in
+            ''|*[!0-9]*) echo "ERROR: upload size must be a whole number of MB, got '$MAX_UPLOAD_MB'" >&2; exit 1 ;;
+        esac
+        if [ "$MAX_UPLOAD_MB" -lt 50 ]; then
+            echo "    note: below the server's default of 50, so videos between"
+            echo "          ${MAX_UPLOAD_MB}MB and 50MB will be refused."
+        fi
+    fi
     return 0
 }
 
@@ -310,9 +357,10 @@ render_conf() {
     echo "GIT_URL=\"$PRODUCT_GIT_URL\""
     echo "PASS_PREFIX=\"$PRODUCT_PASS_PREFIX\""
     [ -n "${PRODUCT_STACK_PREFIX:-}" ] && echo "STACK_PREFIX=\"$PRODUCT_STACK_PREFIX\""
-    # nginx's own name for it; the product config calls it max_upload_size.
-    [ -n "${PRODUCT_MAX_UPLOAD_SIZE:-}" ] && \
-        echo "NGINX_CLIENT_MAX_BODY_SIZE=\"$PRODUCT_MAX_UPLOAD_SIZE\""
+    # nginx caps the whole request, which is the file plus its multipart
+    # envelope, so it sits a little above the file limit the server enforces.
+    # Equal numbers would 413 an upload of exactly the permitted size.
+    echo "NGINX_CLIENT_MAX_BODY_SIZE=\"$((MAX_UPLOAD_MB + 5))M\""
     echo
     echo "# Only the environments this host serves. An environment absent here"
     echo "# cannot be deployed from this machine, which is the point."
@@ -325,36 +373,39 @@ render_conf() {
         [ -n "$_sites" ] && echo "${e}_ALLOWED_WEBSITES=\"$_sites\""
         echo
     done
-    if [ -n "${PC_KEYS[server_env]:-}${PC_KEYS[email_service]:-}" ]; then
-        echo "# Product identity, email settings and feature flags. A value starting"
-        echo "# with '@' is read from pass and mounted as a secret file; the rest are"
-        echo "# literals passed as environment variables."
-        echo "_COMMON_ENV=("
-        for sect in server_env email_service; do
-            for k in ${PC_KEYS[$sect]:-}; do
-                # {env} entries belong to one environment, so they go below.
-                case "${PC[$sect.$k]}" in *'{env}'*) continue ;; esac
-                echo "    \"$k=${PC[$sect.$k]}\""
-            done
+    echo "# Product identity, email settings and feature flags. A value starting"
+    echo "# with '@' is read from pass and mounted as a secret file; the rest are"
+    echo "# literals passed as environment variables."
+    echo "_COMMON_ENV=("
+    for sect in product email_service; do
+        for k in ${PC_KEYS[$sect]:-}; do
+            is_server_key "$k" || continue
+            # {env} entries belong to one environment, so they go below.
+            case "${PC[$sect.$k]}" in *'{env}'*) continue ;; esac
+            echo "    \"$(env_name "$k")=$(pass_path "${PC[$sect.$k]}")\""
         done
-        echo ")"
-        echo
-    fi
+    done
+    # Set from one answer so nginx and the server cannot disagree about it.
+    echo "    \"MAX_VIDEO_UPLOAD_SIZE_MB=$MAX_UPLOAD_MB\""
+    echo ")"
+    echo
     for e in "${CHOSEN[@]}"; do
         echo "${e}_EXTRA_ENV=(\"\${_COMMON_ENV[@]}\""
         # Entries carrying {env}: one per environment, never shared. An
         # encryption KEK is the reason this exists.
-        for sect in server_env email_service; do
+        for sect in product email_service; do
             for k in ${PC_KEYS[$sect]:-}; do
+                is_server_key "$k" || continue
                 case "${PC[$sect.$k]}" in
-                    *'{env}'*) echo "    \"$k=${PC[$sect.$k]//\{env\}/$e}\"" ;;
+                    *'{env}'*) echo "    \"$(env_name "$k")=$(pass_path "${PC[$sect.$k]//\{env\}/$e}")\"" ;;
                 esac
             done
         done
         # Declared for this environment only.
-        for sect in "server_env.$e" "email_service.$e"; do
+        for sect in "env.$e" "email_service.$e"; do
             for k in ${PC_KEYS[$sect]:-}; do
-                echo "    \"$k=${PC[$sect.$k]//\{env\}/$e}\""
+                is_server_key "$k" || continue
+                echo "    \"$(env_name "$k")=$(pass_path "${PC[$sect.$k]//\{env\}/$e}")\""
             done
         done
         echo ")"
@@ -388,7 +439,7 @@ resolve_answers 0
 echo "==> Reading the server's config-schema version"
 TARGET_VERSION=""
 for e in "${CHOSEN[@]}"; do
-    _ref="$(pc "env.$e" ref)"
+    _ref="$(env_ref "$e")"
     _v="$(fetch_server_version "$PRODUCT_GIT_URL" "$_ref")" || {
         echo "ERROR: could not read VERSION from $PRODUCT_GIT_URL at '$_ref' (${ENV_LABEL[$e]:-$e})" >&2
         echo "       The version decides whether this run must ask you about new" >&2
@@ -460,13 +511,14 @@ resolve_answers "$ASK_QUESTIONS"
 # keyboard does not know it either — asking only invites an invented value. It
 # belongs in the product defaults, filled when that installer is released.
 UNSET_VALUES=()
-for sect in server_env email_service; do
+for sect in product email_service; do
     for name in ${PC_KEYS[$sect]:-}; do
+        is_server_key "$name" || continue
         [ "${PC[$sect.$name]}" = "REPLACE_ME" ] && UNSET_VALUES+=("[$sect] $name")
     done
 done
 for e in "${CHOSEN[@]}"; do
-    [ -n "$(pc "env.$e" ref)" ] || UNSET_VALUES+=("[env.$e] branch")
+    [ -n "$(env_ref "$e")" ] || UNSET_VALUES+=("[env.$e] branch")
 done
 if [ ${#UNSET_VALUES[@]} -gt 0 ]; then
     echo >&2
@@ -488,7 +540,7 @@ cat <<EOF
 EOF
 for e in "${CHOSEN[@]}"; do
     pv="${e}_PORT"; _sites="$(pc "env.$e" websites '')"
-    printf '      %-5s port=%s branch=%s%s\n' "$e" "${!pv}" "$(pc "env.$e" ref)" \
+    printf '      %-5s port=%s branch=%s%s\n' "$e" "${!pv}" "$(env_ref "$e")" \
         "$([ -n "$_sites" ] && printf ' sites=%s' "$_sites")"
 done
 echo
