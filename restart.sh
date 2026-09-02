@@ -192,8 +192,11 @@ else
     SERVER_PORT="127.0.0.1:${PORT}:8000"
 fi
 
-# Export environment variables for docker-compose
-PACKAGE_NAME="${PACKAGE_NAME:-$PROJECT_NAME}"
+# Export environment variables for docker-compose.
+# PACKAGE_NAME is passed through as-is, empty included: an empty value is what
+# lets entrypoint.sh derive it from the application's pyproject.toml. Defaulting
+# it to PROJECT_NAME here would silently prevent that.
+PACKAGE_NAME="${PACKAGE_NAME:-}"
 export PROJECT_NAME
 export PACKAGE_NAME
 export GIT_URL

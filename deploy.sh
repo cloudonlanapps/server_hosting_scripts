@@ -382,12 +382,15 @@ POSTGRES_USER="$PROJECT_NAME"
 # PROJECT_NAME names the stack and its database. The Python package installed
 # in the server image is a separate thing — entrypoint.sh runs
 # ${PACKAGE_NAME}_bootstrap and ${PACKAGE_NAME}_server.main:app — and the two
-# only coincide when the deployment is named after the package. Defaults to
-# PROJECT_NAME, so existing deployments are unaffected.
-PACKAGE_NAME="${PACKAGE_NAME:-$PROJECT_NAME}"
-
+# only coincide when the deployment happens to be named after the package.
+#
+# Deliberately NOT defaulted to PROJECT_NAME here. Doing so used to guarantee a
+# value, but it also meant the container never saw an empty PACKAGE_NAME and so
+# never reached the derivation in entrypoint.sh, which reads the name from the
+# application's own pyproject.toml. An empty value is passed through on purpose;
+# the container derives it, and fails loudly if it cannot.
 echo "==> Project: $PROJECT_NAME"
-if [ "$PACKAGE_NAME" != "$PROJECT_NAME" ]; then echo "    Python package: $PACKAGE_NAME"; fi
+if [ -n "$PACKAGE_NAME" ]; then echo "    Python package: $PACKAGE_NAME (from the conf)"; fi
 echo "    Git URL: $GIT_URL"
 echo "    Branch: ${REPO_BRANCH:-repo default}"
 echo "    Port: $PORT"
