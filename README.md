@@ -32,9 +32,13 @@ for beta.
 
 ## How to write an installer for a new product
 
-An installer has two parts: a **product defaults file** holding every product
-decision, and a shipped script whose only jobs are to carry that file, fetch
-this repo at a pinned ref, and hand both to `setup-conf.sh`.
+An installer has two parts: a **product config** — plain INI, holding every
+product decision — and a shipped script whose only jobs are to carry that file,
+fetch this repo at a pinned ref, and hand both to `setup-conf.sh`.
+
+The config is data, not code. `setup-conf.sh` parses it rather than sourcing it,
+so a product config cannot run anything, shadow a function, or set a variable
+the tooling relies on.
 
 `setup-conf.sh` owns the conf. It rewrites the file in full on every run that
 writes, so nothing in it is hand-edited; what survives a reconfigure is the
@@ -43,9 +47,15 @@ default for the prompt that regenerates it. A setting the product file gained
 since falls through to its product default and becomes a new question, which is
 what stops a new setting from silently missing an existing deployment.
 
-**This repo holds no defaults.** It knows a conf's shape — which variables must
-exist, which are per-environment — and nothing about their values. A required
-value the product file does not declare is a hard error naming the variable.
+**This repo holds no product defaults.** It knows a conf's shape — which
+variables must exist, which are per-environment — and nothing about their
+values. A required value the product config does not declare is a hard error
+naming the key.
+
+The one thing it does fix is the set of environment **names**: `prod`, `beta`,
+`dev`. Those carry tooling semantics — `dev` is the only one that may track a
+commit rather than a branch, and the only one exposed beyond localhost — so a
+product picks values for them, never the set.
 
 Two things are asked, because only two are decided per machine: which
 environments this host serves, and the port for each. Everything else is a

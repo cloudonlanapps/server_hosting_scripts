@@ -63,22 +63,90 @@ done
 mkdir -p "$DIR"
 DIR="$(cd "$DIR" && pwd)"
 
-# ── The product defaults ────────────────────────────────────────────────────
-# shellcheck disable=SC1090
-source "$DEFAULTS_FILE"
+# ── The environments ────────────────────────────────────────────────────────
+# Fixed here, not chosen by a product. These names carry tooling semantics:
+# `dev` is the only environment allowed to track a commit rather than a branch,
+# and the only one exposed beyond localhost (deploy-conf.sh enforces both). A
+# product that invented its own set would silently lose that handling, so a
+# product picks VALUES for these environments, never the set itself.
+KNOWN_ENVS=(prod beta dev)
 
-# Everything below is required OF THE PRODUCT FILE. No fallbacks: a missing
-# declaration is the product's bug, and a default invented here would hide it.
-MISSING_DECL=()
-for v in PRODUCT_CONF_NAME PRODUCT_PROJECT PRODUCT_GIT_URL PRODUCT_PASS_PREFIX PRODUCT_DEFAULT_ENVS; do
-    [ -n "${!v:-}" ] || MISSING_DECL+=("$v")
-done
-declare -p PRODUCT_ENVS >/dev/null 2>&1 && [ ${#PRODUCT_ENVS[@]} -gt 0 ] || MISSING_DECL+=("PRODUCT_ENVS")
-if [ ${#MISSING_DECL[@]} -gt 0 ]; then
-    echo "ERROR: $DEFAULTS_FILE does not declare:" >&2
-    printf '  - %s\n' "${MISSING_DECL[@]}" >&2
+# What a fresh host serves when it has no conf yet. A new install is somebody's
+# dev box far more often than it is a production one, and defaulting to prod
+# would make the wrong accident easy.
+DEFAULT_ENVS="dev"
+
+# ── The product config ──────────────────────────────────────────────────────
+# Plain INI, parsed here. It is data, not code: a product cannot run anything,
+# shadow a function, or set a variable this script relies on — which a sourced
+# bash file could all do by accident.
+#
+# Sections:
+#   [product]           identity
+#   [tooling]           which server_hosting_scripts build, and the version ref
+#   [env.<name>]        branch / port / websites for one environment
+#   [server_env]        env passthrough for every environment
+#   [server_env.<name>] env passthrough for one environment only
+#
+# In a passthrough value, {env} expands to the environment name and a leading @
+# means "read from pass" — which the deploy tooling already treats as the signal
+# to mount it as a secret file rather than an environment variable.
+declare -A PC          # "section.key" -> value
+declare -A PC_KEYS     # "section"     -> space-separated keys, in file order
+
+parse_product_conf() {
+    local file="$1" section="" line key value
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        case "$line" in
+            ''|'#'*|';'*) continue ;;
+            '['*']')
+                section="${line#[}"; section="${section%]}"
+                continue ;;
+        esac
+        [ -n "$section" ] || { echo "ERROR: $file: '$line' appears before any [section]" >&2; exit 1; }
+        case "$line" in
+            *=*) ;;
+            *) echo "ERROR: $file: no '=' in line: $line" >&2; exit 1 ;;
+        esac
+        key="${line%%=*}"; value="${line#*=}"
+        # trim surrounding whitespace from both halves
+        key="${key#"${key%%[![:space:]]*}"}"; key="${key%"${key##*[![:space:]]}"}"
+        value="${value#"${value%%[![:space:]]*}"}"; value="${value%"${value##*[![:space:]]}"}"
+        PC["$section.$key"]="$value"
+        PC_KEYS["$section"]="${PC_KEYS["$section"]:-}${PC_KEYS["$section"]:+ }$key"
+    done < "$file"
+}
+
+# pc <section> <key> [default] — a missing key with no default is fatal, by name.
+pc() {
+    local k="$1.$2"
+    if [ -n "${PC[$k]+x}" ]; then printf '%s' "${PC[$k]}"; return 0; fi
+    if [ $# -ge 3 ]; then printf '%s' "$3"; return 0; fi
+    echo "ERROR: $DEFAULTS_FILE does not set [$1] $2" >&2
     exit 1
-fi
+}
+
+parse_product_conf "$DEFAULTS_FILE"
+
+PRODUCT_DISPLAY_NAME="$(pc product display_name)"
+PRODUCT_PROJECT="$(pc product project)"
+PRODUCT_GIT_URL="$(pc product git_url)"
+PRODUCT_PASS_PREFIX="$(pc product pass_prefix)"
+PRODUCT_STACK_PREFIX="$(pc product stack_prefix '')"
+PRODUCT_NGINX_CLIENT_MAX_BODY_SIZE="$(pc product nginx_client_max_body_size '')"
+PRODUCT_VERSION_REF="$(pc tooling version_ref main)"
+
+# Derived, not declared: repeating them in every product config would be two
+# more values to get wrong for no decision gained.
+PRODUCT_CONF_NAME="host_${PRODUCT_PROJECT}_server.conf"
+
+# Every environment must be fully described, so a host cannot select one that
+# turns out to be half-configured.
+for e in "${KNOWN_ENVS[@]}"; do
+    [ -n "${PC[env.$e.branch]+x}" ] || { echo "ERROR: $DEFAULTS_FILE has no [env.$e] branch" >&2; exit 1; }
+    [ -n "${PC[env.$e.port]+x}" ]   || { echo "ERROR: $DEFAULTS_FILE has no [env.$e] port" >&2; exit 1; }
+done
 
 CONF="$DIR/$PRODUCT_CONF_NAME"
 
@@ -147,18 +215,18 @@ resolve_answers() {
     if declare -p ENVS >/dev/null 2>&1; then
         SELECTED_ENVS="${ENVS[*]}"
     else
-        SELECTED_ENVS="${PRODUCT_DEFAULT_ENVS:-}"
+        SELECTED_ENVS="$DEFAULT_ENVS"
     fi
     if [ "$ask_them" = 1 ]; then
         echo
-        ask SELECTED_ENVS "Which environments does this host serve? (${PRODUCT_ENVS[*]})"
+        ask SELECTED_ENVS "Which environments does this host serve? (${KNOWN_ENVS[*]})"
     fi
 
     CHOSEN=()
     for e in $SELECTED_ENVS; do
         known=0
-        for k in "${PRODUCT_ENVS[@]}"; do [ "$e" = "$k" ] && known=1; done
-        [ "$known" = 1 ] || { echo "ERROR: '$e' is not an environment this product defines (${PRODUCT_ENVS[*]})" >&2; exit 1; }
+        for k in "${KNOWN_ENVS[@]}"; do [ "$e" = "$k" ] && known=1; done
+        [ "$known" = 1 ] || { echo "ERROR: '$e' is not an environment (${KNOWN_ENVS[*]})" >&2; exit 1; }
         CHOSEN+=("$e")
     done
     [ ${#CHOSEN[@]} -gt 0 ] || { echo "ERROR: no environments selected" >&2; exit 1; }
@@ -169,9 +237,7 @@ resolve_answers() {
     for e in "${CHOSEN[@]}"; do
         pv="${e}_PORT"
         OLD_PORT[$e]="${!pv:-}"
-        dv="PRODUCT_${e}_PORT"
-        [ -n "${!pv:-}" ] || printf -v "$pv" '%s' "${!dv:-}"
-        [ -n "${!pv:-}" ] || { echo "ERROR: $DEFAULTS_FILE declares no PRODUCT_${e}_PORT" >&2; exit 1; }
+        [ -n "${!pv:-}" ] || printf -v "$pv" '%s' "$(pc "env.$e" port)"
         [ "$ask_them" = 1 ] && ask "$pv" "Port for $e"
     done
     return 0
@@ -208,36 +274,39 @@ render_conf() {
     echo "ENVS=(${CHOSEN[*]})"
     echo
     for e in "${CHOSEN[@]}"; do
-        pv="${e}_PORT"; bv="PRODUCT_${e}_GIT_BRANCH"; wv="PRODUCT_${e}_ALLOWED_WEBSITES"
-        echo "${e}_GIT_BRANCH=\"${!bv}\""
+        pv="${e}_PORT"; _sites="$(pc "env.$e" websites '')"
+        echo "${e}_GIT_BRANCH=\"$(pc "env.$e" branch)\""
         echo "${e}_PORT=\"${!pv}\""
-        [ -n "${!wv:-}" ] && echo "${e}_ALLOWED_WEBSITES=\"${!wv}\""
+        [ -n "$_sites" ] && echo "${e}_ALLOWED_WEBSITES=\"$_sites\""
         echo
     done
-    if declare -p PRODUCT_ENV_COMMON >/dev/null 2>&1 && [ ${#PRODUCT_ENV_COMMON[@]} -gt 0 ]; then
+    if [ -n "${PC_KEYS[server_env]:-}" ]; then
         echo "# Product identity and feature flags. Values that start with '@' are"
         echo "# read from pass and mounted as secret files; the rest are literals"
         echo "# passed as environment variables."
         echo "_COMMON_ENV=("
-        for entry in "${PRODUCT_ENV_COMMON[@]}"; do
-            [ -n "$entry" ] && echo "    \"$entry\""
+        for k in ${PC_KEYS[server_env]}; do
+            # {env} is per-environment, so those entries move to the per-env
+            # arrays below rather than the shared one.
+            case "${PC[server_env.$k]}" in *'{env}'*) continue ;; esac
+            echo "    \"$k=${PC[server_env.$k]}\""
         done
         echo ")"
         echo
     fi
     for e in "${CHOSEN[@]}"; do
         echo "${e}_EXTRA_ENV=(\"\${_COMMON_ENV[@]}\""
-        # Templated per environment — an encryption KEK is one per environment
-        # and never shared, so @ENV@ expands to the environment name.
-        for tmpl in ${PRODUCT_ENV_PER_ENV[@]+"${PRODUCT_ENV_PER_ENV[@]}"}; do
-            [ -n "$tmpl" ] || continue
-            echo "    \"${tmpl//@ENV@/$e}\""
+        # Entries carrying {env}: one per environment, never shared. An
+        # encryption KEK is the reason this exists.
+        for k in ${PC_KEYS[server_env]:-}; do
+            case "${PC[server_env.$k]}" in
+                *'{env}'*) echo "    \"$k=${PC[server_env.$k]//\{env\}/$e}\"" ;;
+            esac
         done
-        # Entries this product declares for THIS environment only — e.g. real
-        # email delivery in prod and beta but not dev.
-        only_var="PRODUCT_ENV_${e}_ONLY[@]"
-        for entry in ${!only_var+"${!only_var}"}; do
-            [ -n "$entry" ] && echo "    \"$entry\""
+        # Declared for this environment only — real email delivery in prod and
+        # beta but not dev, for instance.
+        for k in ${PC_KEYS[server_env.$e]:-}; do
+            echo "    \"$k=${PC[server_env.$e.$k]//\{env\}/$e}\""
         done
         echo ")"
     done
@@ -327,15 +396,11 @@ resolve_answers "$ASK_QUESTIONS"
 # keyboard does not know it either — asking only invites an invented value. It
 # belongs in the product defaults, filled when that installer is released.
 UNSET_VALUES=()
-for entry in ${PRODUCT_ENV_COMMON[@]+"${PRODUCT_ENV_COMMON[@]}"}; do
-    [ -n "$entry" ] || continue
-    name="${entry%%=*}"; val="${entry#*=}"
-    [ "$val" = "REPLACE_ME" ] && UNSET_VALUES+=("$name")
+for name in ${PC_KEYS[server_env]:-}; do
+    [ "${PC[server_env.$name]}" = "REPLACE_ME" ] && UNSET_VALUES+=("[server_env] $name")
 done
 for e in "${CHOSEN[@]}"; do
-    for v in "PRODUCT_${e}_GIT_BRANCH"; do
-        [ -n "${!v:-}" ] || UNSET_VALUES+=("$v")
-    done
+    [ -n "$(pc "env.$e" branch)" ] || UNSET_VALUES+=("[env.$e] branch")
 done
 if [ ${#UNSET_VALUES[@]} -gt 0 ]; then
     echo >&2
@@ -356,9 +421,9 @@ cat <<EOF
     environments ${CHOSEN[*]}
 EOF
 for e in "${CHOSEN[@]}"; do
-    pv="${e}_PORT"; bv="PRODUCT_${e}_GIT_BRANCH"; wv="PRODUCT_${e}_ALLOWED_WEBSITES"
-    printf '      %-5s port=%s branch=%s%s\n' "$e" "${!pv}" "${!bv}" \
-        "$([ -n "${!wv:-}" ] && printf ' sites=%s' "${!wv}")"
+    pv="${e}_PORT"; _sites="$(pc "env.$e" websites '')"
+    printf '      %-5s port=%s branch=%s%s\n' "$e" "${!pv}" "$(pc "env.$e" branch)" \
+        "$([ -n "$_sites" ] && printf ' sites=%s' "$_sites")"
 done
 echo
 if [ "$ASSUME_YES" != 1 ] && tty_ok; then
@@ -374,9 +439,9 @@ fi
 for e in "${CHOSEN[@]}"; do
     pv="${e}_PORT"; old="${OLD_PORT[$e]:-}"
     if [ -n "$old" ] && [ "$old" != "${!pv}" ]; then
-        wv="PRODUCT_${e}_ALLOWED_WEBSITES"
-        if [ -n "${!wv:-}" ]; then
-            domain="${!wv%%,*}"
+        _sites="$(pc "env.$e" websites '')"
+        if [ -n "$_sites" ]; then
+            domain="${_sites%%,*}"
             echo
             echo "!! ${e}_PORT changed $old -> ${!pv}. The nginx vhost for $domain"
             echo "   still proxies to $old. Re-run the installer's --install-ngx step"
