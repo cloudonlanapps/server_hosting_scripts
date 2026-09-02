@@ -24,7 +24,7 @@ source "./lib_extra_env.sh"
 #                       optional in dev mode; defaults to main)
 #   --port PORT         Host port (default: 8001)
 #   --reset             Drop all tables before starting (fresh database)
-#   --secret-key KEY    JWT signing key (auto-generated if not provided; changing it invalidates existing user sessions)
+#   --secret-key KEY    JWT signing key, REQUIRED (changing it invalidates existing user sessions)
 #   --github-token TOK  GitHub token for cloning private repo
 #   --package-name NAME Python package installed in the server image, if it differs
 #                       from --project (default: same as --project)
@@ -53,7 +53,7 @@ show_usage() {
     echo "                      mode, optional in dev mode; defaults to main)"
     echo "  --port PORT         Host port (default: 8001)"
     echo "  --reset             Drop all tables before starting (fresh database)"
-    echo "  --secret-key KEY    JWT signing key (auto-generated if not provided; changing it invalidates existing user sessions)"
+    echo "  --secret-key KEY    JWT signing key, REQUIRED (changing it invalidates existing user sessions)"
     echo "  --github-token TOK  GitHub token for cloning private repo"
     echo "  --package-name NAME Python package installed in the server image, if it"
     echo "                      differs from --project (default: same as --project)"
@@ -292,11 +292,21 @@ if [ ${#POSTGRES_PASSWORD} -lt 6 ]; then
     exit 1
 fi
 
-# Auto-generate SECRET_KEY if not provided
+# SECRET_KEY must be supplied, never minted here. This used to auto-generate one
+# and print it, which put a live signing key into terminal scrollback, tmux
+# buffers and any log the deploy was piped into. Generating it silently is no
+# better: the value would exist nowhere else, so the next deploy would mint a
+# different one and invalidate every session without saying why.
+#
+# restart.sh has always required it. deploy-conf.sh reads it from `pass`, so the
+# conf-driven path is unaffected.
 if [ -z "$SECRET_KEY" ]; then
-    SECRET_KEY=$(openssl rand -hex 32)
-    echo "==> Generated SECRET_KEY (save this for future deployments):"
-    echo "    $SECRET_KEY"
+    echo "ERROR: --secret-key is required." >&2
+    echo "       It signs JWTs, so it must persist across deploys — a fresh key" >&2
+    echo "       invalidates every existing session." >&2
+    echo "       Generate once and store it, then pass it on every deploy:" >&2
+    echo "         openssl rand -hex 32 | pass insert -m <prefix>/<env>/secret-key" >&2
+    exit 1
 fi
 
 # Data directory base
@@ -531,11 +541,6 @@ else
     echo "Server bound to localhost:$PORT (use nginx to proxy)"
     echo "Next step: sudo ./setup-nginx.sh --domain <server_domain> --port $PORT"
 fi
-echo ""
-echo "Save these credentials securely:"
-echo "  Bootstrap password: $BOOTSTRAP_PASSWORD"
-echo "  Postgres password:  $POSTGRES_PASSWORD"
-echo "  Secret key:         $SECRET_KEY"
 echo ""
 echo "Data directories:"
 echo "  Database: $DATA_DIR/db"
