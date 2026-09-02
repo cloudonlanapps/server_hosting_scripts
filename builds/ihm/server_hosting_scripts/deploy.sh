@@ -472,6 +472,25 @@ if [ -n "$EXTRA_ENV_NAMES$EXTRA_SECRET_ENV_NAMES" ]; then
     COMPOSE_FILES+=(-f "$OVERRIDE_FILE")
 fi
 
+# A deploy takes the stack down, rebuilds the image and brings it back, so on a
+# live environment it is an outage. Say so and ask, when there is something
+# running and someone to ask. No terminal means no prompt, so CI is unaffected.
+RUNNING="$(docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILES[@]}" ps --status running -q 2>/dev/null | wc -l)"
+if [ "${RUNNING:-0}" -gt 0 ] && { true >/dev/tty; } 2>/dev/null; then
+    echo
+    echo "$COMPOSE_PROJECT_NAME is running:"
+    docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILES[@]}" ps --status running \
+        --format '    {{.Name}}  {{.Status}}' 2>/dev/null || true
+    echo
+    echo "Deploying stops it, rebuilds the image and starts it again."
+    if [ "$RESET_DB" = true ]; then
+        echo "--reset will ALSO delete the database at $DATA_DIR/db."
+    fi
+    printf 'Continue? [y/N]: ' > /dev/tty
+    read -r _go < /dev/tty || true
+    case "${_go:-N}" in [yY]*) ;; *) echo "Aborted."; exit 1 ;; esac
+fi
+
 echo "==> Stopping existing containers for $COMPOSE_PROJECT_NAME..."
 docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILES[@]}" down 2>/dev/null || true
 

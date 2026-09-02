@@ -37,6 +37,8 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 DEFAULTS_FILE=""
 DIR=""
 FORCE_UPGRADE=0
@@ -516,8 +518,63 @@ cat <<EOF
 
     conf    $CONF   (schema $TARGET_VERSION)
     envs    ${CHOSEN[*]}
-
-Next:
-    cd $DIR
-    just deploy ${CHOSEN[0]}
 EOF
+
+# Offer to deploy. Configuring writes files; deploying builds an image and
+# starts containers, so it is asked per environment and never assumed. Under
+# --yes nothing is deployed: a scripted run should not start a server as a side
+# effect of being configured.
+DEPLOYED=()
+if [ "$ASSUME_YES" != 1 ] && tty_ok; then
+    echo > /dev/tty
+    for e in "${CHOSEN[@]}"; do
+        printf 'Deploy %s now? [Y/n]: ' "${ENV_LABEL[$e]:-$e}" > /dev/tty
+        read -r _go < /dev/tty || true
+        case "${_go:-Y}" in
+            [nN]*) ;;
+            *) DEPLOYED+=("$e") ;;
+        esac
+    done
+fi
+
+for e in ${DEPLOYED[@]+"${DEPLOYED[@]}"}; do
+    echo
+    echo "==> Deploying ${ENV_LABEL[$e]:-$e}"
+    ( cd "$DIR" && "$SCRIPT_DIR/deploy-conf.sh" "$CONF" "$e" )
+done
+
+# Whatever was not deployed is configured and nothing more. Say so: the gap
+# between "the conf says X" and "the server does X" is exactly where a change
+# gets believed before it has happened.
+PENDING=()
+for e in "${CHOSEN[@]}"; do
+    _done=0
+    for d in ${DEPLOYED[@]+"${DEPLOYED[@]}"}; do [ "$d" = "$e" ] && _done=1; done
+    [ "$_done" = 1 ] || PENDING+=("$e")
+done
+
+if [ ${#PENDING[@]} -gt 0 ]; then
+    echo
+    _pending_labels="$(env_labels "${PENDING[*]}")"; _pending_labels="${_pending_labels// /, }"
+    [ ${#PENDING[@]} -eq 1 ] && _verb=runs || _verb=run
+    if [ "$MODE" = upgrade ]; then
+        echo "!! NOT DEPLOYED — this configuration is not live."
+        echo "   A server keeps the settings it started with, so $_pending_labels"
+        echo "   $_verb the previous configuration until you apply it."
+    else
+        echo "!! NOT DEPLOYED — nothing is running yet for $_pending_labels."
+    fi
+    echo
+    echo "   cd $DIR"
+    for e in "${PENDING[@]}"; do
+        if [ "$MODE" = upgrade ]; then
+            # restart re-reads the conf and recreates the containers, so a
+            # configuration-only change needs no rebuild.
+            echo "   just restart $e     # apply this configuration to the running image"
+            echo "   just deploy  $e     # rebuild from git, then apply"
+        else
+            echo "   just deploy $e"
+        fi
+    done
+    echo
+fi

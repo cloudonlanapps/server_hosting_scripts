@@ -543,11 +543,38 @@ for e in ${DEPLOYED[@]+"${DEPLOYED[@]}"}; do
     ( cd "$DIR" && "$SCRIPT_DIR/deploy-conf.sh" "$CONF" "$e" )
 done
 
-if [ ${#DEPLOYED[@]} -eq 0 ]; then
-    cat <<EOF
+# Whatever was not deployed is configured and nothing more. Say so: the gap
+# between "the conf says X" and "the server does X" is exactly where a change
+# gets believed before it has happened.
+PENDING=()
+for e in "${CHOSEN[@]}"; do
+    _done=0
+    for d in ${DEPLOYED[@]+"${DEPLOYED[@]}"}; do [ "$d" = "$e" ] && _done=1; done
+    [ "$_done" = 1 ] || PENDING+=("$e")
+done
 
-To deploy:
-    cd $DIR
-$(for e in "${CHOSEN[@]}"; do echo "    just deploy $e"; done)
-EOF
+if [ ${#PENDING[@]} -gt 0 ]; then
+    echo
+    _pending_labels="$(env_labels "${PENDING[*]}")"; _pending_labels="${_pending_labels// /, }"
+    [ ${#PENDING[@]} -eq 1 ] && _verb=runs || _verb=run
+    if [ "$MODE" = upgrade ]; then
+        echo "!! NOT DEPLOYED — this configuration is not live."
+        echo "   A server keeps the settings it started with, so $_pending_labels"
+        echo "   $_verb the previous configuration until you apply it."
+    else
+        echo "!! NOT DEPLOYED — nothing is running yet for $_pending_labels."
+    fi
+    echo
+    echo "   cd $DIR"
+    for e in "${PENDING[@]}"; do
+        if [ "$MODE" = upgrade ]; then
+            # restart re-reads the conf and recreates the containers, so a
+            # configuration-only change needs no rebuild.
+            echo "   just restart $e     # apply this configuration to the running image"
+            echo "   just deploy  $e     # rebuild from git, then apply"
+        else
+            echo "   just deploy $e"
+        fi
+    done
+    echo
 fi
