@@ -148,18 +148,19 @@ pc() {
     if [ -n "${PC[$k]+x}" ]; then printf '%s' "${PC[$k]}"; return 0; fi
     if [ $# -ge 3 ]; then printf '%s' "$3"; return 0; fi
     echo "ERROR: $DEFAULTS_FILE does not set [$1] $2" >&2
+    # Inside $( ), `exit` ends only the subshell; without this the caller would
+    # carry on and write the empty value it just failed to produce.
+    kill -TERM $$ 2>/dev/null
     exit 1
 }
 
 parse_product_conf "$DEFAULTS_FILE"
 
-PRODUCT_DISPLAY_NAME="$(pc product display_name)"
 PRODUCT_PROJECT="$(pc product project)"
 PRODUCT_GIT_URL="$(pc product git_url)"
 PRODUCT_PASS_PREFIX="$(pc product pass_prefix)"
-PRODUCT_STACK_PREFIX="$(pc product stack_prefix '')"
+PRODUCT_STACK_PREFIX="$(pc product company_id '')"
 PRODUCT_NGINX_CLIENT_MAX_BODY_SIZE="$(pc product nginx_client_max_body_size '')"
-PRODUCT_VERSION_REF="$(pc tooling version_ref main)"
 
 # Derived, not declared: repeating them in every product config would be two
 # more values to get wrong for no decision gained.
@@ -168,7 +169,7 @@ PRODUCT_CONF_NAME="host_${PRODUCT_PROJECT}_server.conf"
 # Every environment must be fully described, so a host cannot select one that
 # turns out to be half-configured.
 for e in "${KNOWN_ENVS[@]}"; do
-    [ -n "${PC[env.$e.branch]+x}" ] || { echo "ERROR: $DEFAULTS_FILE has no [env.$e] branch" >&2; exit 1; }
+    [ -n "${PC[env.$e.ref]+x}" ] || { echo "ERROR: $DEFAULTS_FILE has no [env.$e] ref" >&2; exit 1; }
     [ -n "${PC[env.$e.port]+x}" ]   || { echo "ERROR: $DEFAULTS_FILE has no [env.$e] port" >&2; exit 1; }
 done
 
@@ -318,21 +319,22 @@ render_conf() {
     echo
     for e in "${CHOSEN[@]}"; do
         pv="${e}_PORT"; _sites="$(pc "env.$e" websites '')"
-        echo "${e}_GIT_BRANCH=\"$(pc "env.$e" branch)\""
+        echo "${e}_GIT_BRANCH=\"$(pc "env.$e" ref)\""
         echo "${e}_PORT=\"${!pv}\""
         [ -n "$_sites" ] && echo "${e}_ALLOWED_WEBSITES=\"$_sites\""
         echo
     done
-    if [ -n "${PC_KEYS[server_env]:-}" ]; then
-        echo "# Product identity and feature flags. Values that start with '@' are"
-        echo "# read from pass and mounted as secret files; the rest are literals"
-        echo "# passed as environment variables."
+    if [ -n "${PC_KEYS[server_env]:-}${PC_KEYS[email_service]:-}" ]; then
+        echo "# Product identity, email settings and feature flags. A value starting"
+        echo "# with '@' is read from pass and mounted as a secret file; the rest are"
+        echo "# literals passed as environment variables."
         echo "_COMMON_ENV=("
-        for k in ${PC_KEYS[server_env]}; do
-            # {env} is per-environment, so those entries move to the per-env
-            # arrays below rather than the shared one.
-            case "${PC[server_env.$k]}" in *'{env}'*) continue ;; esac
-            echo "    \"$k=${PC[server_env.$k]}\""
+        for sect in server_env email_service; do
+            for k in ${PC_KEYS[$sect]:-}; do
+                # {env} entries belong to one environment, so they go below.
+                case "${PC[$sect.$k]}" in *'{env}'*) continue ;; esac
+                echo "    \"$k=${PC[$sect.$k]}\""
+            done
         done
         echo ")"
         echo
@@ -341,15 +343,18 @@ render_conf() {
         echo "${e}_EXTRA_ENV=(\"\${_COMMON_ENV[@]}\""
         # Entries carrying {env}: one per environment, never shared. An
         # encryption KEK is the reason this exists.
-        for k in ${PC_KEYS[server_env]:-}; do
-            case "${PC[server_env.$k]}" in
-                *'{env}'*) echo "    \"$k=${PC[server_env.$k]//\{env\}/$e}\"" ;;
-            esac
+        for sect in server_env email_service; do
+            for k in ${PC_KEYS[$sect]:-}; do
+                case "${PC[$sect.$k]}" in
+                    *'{env}'*) echo "    \"$k=${PC[$sect.$k]//\{env\}/$e}\"" ;;
+                esac
+            done
         done
-        # Declared for this environment only — real email delivery in prod and
-        # beta but not dev, for instance.
-        for k in ${PC_KEYS[server_env.$e]:-}; do
-            echo "    \"$k=${PC[server_env.$e.$k]//\{env\}/$e}\""
+        # Declared for this environment only.
+        for sect in "server_env.$e" "email_service.$e"; do
+            for k in ${PC_KEYS[$sect]:-}; do
+                echo "    \"$k=${PC[$sect.$k]//\{env\}/$e}\""
+            done
         done
         echo ")"
     done
@@ -371,16 +376,32 @@ if [ -f "$CONF" ]; then
     MODE=upgrade
 fi
 
+# Which environments this host serves, resolved without asking, so the version
+# below can be read from the refs those environments actually deploy.
+resolve_answers 0
+
+# The version being installed is the server's own, at the ref each environment
+# tracks — there is no separate setting for it. Environments can sit at
+# different refs, so the highest wins: it is the one whose settings the conf has
+# to be able to satisfy.
 echo "==> Reading the server's config-schema version"
-TARGET_VERSION="$(fetch_server_version "$PRODUCT_GIT_URL" "${PRODUCT_VERSION_REF:-main}")" || {
-    echo "ERROR: could not read VERSION from $PRODUCT_GIT_URL" >&2
-    echo "       The version decides whether this run must ask you about new" >&2
-    echo "       settings, so a failed read is not something to guess past." >&2
-    echo "       Check network access, and that ${PRODUCT_PASS_PREFIX}/github-token" >&2
-    echo "       is present and still valid for a private repo." >&2
-    exit 1
-}
-echo "    server=$TARGET_VERSION${INSTALLED_VERSION:+  conf=$INSTALLED_VERSION}"
+TARGET_VERSION=""
+for e in "${CHOSEN[@]}"; do
+    _ref="$(pc "env.$e" ref)"
+    _v="$(fetch_server_version "$PRODUCT_GIT_URL" "$_ref")" || {
+        echo "ERROR: could not read VERSION from $PRODUCT_GIT_URL at '$_ref' (${ENV_LABEL[$e]:-$e})" >&2
+        echo "       The version decides whether this run must ask you about new" >&2
+        echo "       settings, so a failed read is not something to guess past." >&2
+        echo "       Check network access, and that ${PRODUCT_PASS_PREFIX}/github-token" >&2
+        echo "       is present and still valid for a private repo." >&2
+        exit 1
+    }
+    echo "    ${ENV_LABEL[$e]:-$e} @ $_ref -> $_v"
+    if [ -z "$TARGET_VERSION" ] || [ "$(printf '%s\n%s\n' "$TARGET_VERSION" "$_v" | sort -V | tail -1)" = "$_v" ]; then
+        TARGET_VERSION="$_v"
+    fi
+done
+[ -n "${INSTALLED_VERSION:-}" ] && echo "    conf was written for $INSTALLED_VERSION"
 
 ASK_QUESTIONS=1
 if [ "$MODE" = upgrade ] && [ "$FORCE_UPGRADE" != 1 ]; then
@@ -392,7 +413,6 @@ if [ "$MODE" = upgrade ] && [ "$FORCE_UPGRADE" != 1 ]; then
         #
         # So render what this run would write, using the answers already in the
         # conf and asking nothing, and compare it against the conf on disk.
-        resolve_answers 0
         CANDIDATE="$(mktemp)"
         trap 'rm -f "$CANDIDATE"' EXIT
         render_conf "$CANDIDATE"
@@ -439,11 +459,13 @@ resolve_answers "$ASK_QUESTIONS"
 # keyboard does not know it either — asking only invites an invented value. It
 # belongs in the product defaults, filled when that installer is released.
 UNSET_VALUES=()
-for name in ${PC_KEYS[server_env]:-}; do
-    [ "${PC[server_env.$name]}" = "REPLACE_ME" ] && UNSET_VALUES+=("[server_env] $name")
+for sect in server_env email_service; do
+    for name in ${PC_KEYS[$sect]:-}; do
+        [ "${PC[$sect.$name]}" = "REPLACE_ME" ] && UNSET_VALUES+=("[$sect] $name")
+    done
 done
 for e in "${CHOSEN[@]}"; do
-    [ -n "$(pc "env.$e" branch)" ] || UNSET_VALUES+=("[env.$e] branch")
+    [ -n "$(pc "env.$e" ref)" ] || UNSET_VALUES+=("[env.$e] branch")
 done
 if [ ${#UNSET_VALUES[@]} -gt 0 ]; then
     echo >&2
@@ -465,7 +487,7 @@ cat <<EOF
 EOF
 for e in "${CHOSEN[@]}"; do
     pv="${e}_PORT"; _sites="$(pc "env.$e" websites '')"
-    printf '      %-5s port=%s branch=%s%s\n' "$e" "${!pv}" "$(pc "env.$e" branch)" \
+    printf '      %-5s port=%s branch=%s%s\n' "$e" "${!pv}" "$(pc "env.$e" ref)" \
         "$([ -n "$_sites" ] && printf ' sites=%s' "$_sites")"
 done
 echo
