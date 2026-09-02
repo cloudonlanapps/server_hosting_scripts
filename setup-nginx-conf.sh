@@ -24,11 +24,6 @@ CONF_FILE="$1"
 ENV="$2"
 shift 2
 
-if [ "$EUID" -ne 0 ]; then
-    echo "ERROR: run as root: sudo $0 $CONF_FILE $ENV"
-    exit 1
-fi
-
 if [ ! -f "$CONF_FILE" ]; then
     echo "ERROR: Conf file not found: $CONF_FILE"
     exit 1
@@ -68,6 +63,13 @@ fi
 # The first entry is the certificate's primary name; the rest are aliases
 # handled by setup-nginx.sh from the same conf.
 DOMAIN="${SITES%%,*}"
+
+# Root last, not first: a wrong conf, a wrong env or an env with no domain are
+# all worth learning before being told to re-run under sudo.
+if [ "$EUID" -ne 0 ]; then
+    echo "ERROR: run as root: sudo $0 $CONF_FILE $ENV"
+    exit 1
+fi
 
 # Confirm the domain. This requests a public certificate for it and writes a
 # vhost, and the domain is the part worth being sure about.
