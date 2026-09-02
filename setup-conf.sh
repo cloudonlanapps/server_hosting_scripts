@@ -180,7 +180,6 @@ pc() {
 parse_product_conf "$DEFAULTS_FILE"
 
 PRODUCT_PROJECT="$(pc product project)"
-PRODUCT_CLUB_NAME="$(pc product club_name)"
 PRODUCT_GIT_URL="$(pc product git_url)"
 PRODUCT_PASS_PREFIX="$(pc product pass_prefix)"
 PRODUCT_STACK_PREFIX="$(pc product company_id '')"
