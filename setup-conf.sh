@@ -71,6 +71,26 @@ DIR="$(cd "$DIR" && pwd)"
 # product picks VALUES for these environments, never the set itself.
 KNOWN_ENVS=(prod beta dev)
 
+# What each environment is called when a person is asked about it. Prompts only:
+# the conf, the container names and every script keep the short forms.
+declare -A ENV_LABEL=([prod]=PRODUCTION [beta]=BETA [dev]=DEVELOPMENT)
+
+env_labels() {  # env_labels "prod dev" -> "PRODUCTION DEVELOPMENT"
+    local out=() e
+    for e in $1; do out+=("${ENV_LABEL[$e]:-$e}"); done
+    printf '%s' "${out[*]}"
+}
+
+env_from_label() {  # accepts either form, in any case
+    local want e
+    want="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+    for e in "${KNOWN_ENVS[@]}"; do
+        [ "$want" = "$e" ] && { printf '%s' "$e"; return 0; }
+        [ "$want" = "$(printf '%s' "${ENV_LABEL[$e]}" | tr '[:upper:]' '[:lower:]')" ] && { printf '%s' "$e"; return 0; }
+    done
+    return 1
+}
+
 # What a fresh host serves when it has no conf yet. A new install is somebody's
 # dev box far more often than it is a production one, and defaulting to prod
 # would make the wrong accident easy.
@@ -217,17 +237,22 @@ resolve_answers() {
     else
         SELECTED_ENVS="$DEFAULT_ENVS"
     fi
-    if [ "$ask_them" = 1 ]; then
-        echo
-        ask SELECTED_ENVS "Which environments does this host serve? (${KNOWN_ENVS[*]})"
+    if [ "$ask_them" = 1 ] && { true >/dev/tty; } 2>/dev/null; then
+        local _choices _default _answer
+        _choices="$(env_labels "${KNOWN_ENVS[*]}")"; _choices="${_choices// / | }"
+        _default="$(env_labels "$SELECTED_ENVS")"
+        echo > /dev/tty
+        printf '%s [%s]: ' "$_choices" "$_default" > /dev/tty
+        read -r _answer < /dev/tty || true
+        SELECTED_ENVS="${_answer:-$_default}"
     fi
 
     CHOSEN=()
     for e in $SELECTED_ENVS; do
-        known=0
-        for k in "${KNOWN_ENVS[@]}"; do [ "$e" = "$k" ] && known=1; done
-        [ "$known" = 1 ] || { echo "ERROR: '$e' is not an environment (${KNOWN_ENVS[*]})" >&2; exit 1; }
-        CHOSEN+=("$e")
+        k="$(env_from_label "$e")" || {
+            local _valid; _valid="$(env_labels "${KNOWN_ENVS[*]}")"
+            echo "ERROR: '$e' is not an environment (${_valid// / | })" >&2; exit 1; }
+        CHOSEN+=("$k")
     done
     [ ${#CHOSEN[@]} -gt 0 ] || { echo "ERROR: no environments selected" >&2; exit 1; }
 
@@ -238,7 +263,7 @@ resolve_answers() {
         pv="${e}_PORT"
         OLD_PORT[$e]="${!pv:-}"
         [ -n "${!pv:-}" ] || printf -v "$pv" '%s' "$(pc "env.$e" port)"
-        [ "$ask_them" = 1 ] && ask "$pv" "Port for $e"
+        [ "$ask_them" = 1 ] && ask "$pv" "Port for ${ENV_LABEL[$e]:-$e}"
     done
     return 0
 }
