@@ -13,7 +13,10 @@ this repo and generates a conf and a justfile.
 
 ## What the server repo must provide
 
-Derived from `PROJECT` (or `PACKAGE`, when they differ):
+Derived from the `[project] name` in the server repo's own `pyproject.toml`,
+with a trailing `_server` stripped — `myproduct-server` gives `myproduct`. A
+conf may set `PACKAGE` to override that, for a repo that does not follow the
+convention, but it should not need to:
 
 | | Example for `PROJECT="myproduct"` |
 |---|---|

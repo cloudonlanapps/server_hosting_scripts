@@ -7,10 +7,41 @@ if [ -z "$PROJECT_NAME" ]; then
 fi
 
 # PACKAGE_NAME is the Python distribution this image actually installed, which
-# is not always the deployment's name. PROJECT_NAME names the stack and its
-# database; the package is whatever the server repo ships. Defaults to
-# PROJECT_NAME, so existing deployments are unaffected.
-PACKAGE_NAME="${PACKAGE_NAME:-$PROJECT_NAME}"
+# is not always the deployment's name. PROJECT_NAME names *this deployment* —
+# its stack, database, data directory and secrets — while the package is a
+# property of the application repo, identical across every deployment of it.
+# One varies per deployment, the other does not, so defaulting one to the other
+# only held while a single product existed.
+#
+# Read it from the repo the image already cloned. The application declares it
+# in pyproject.toml, so the conf does not have to repeat it. An explicit
+# PACKAGE_NAME still wins, for a repo that does not follow the <name>_server
+# convention.
+if [ -z "${PACKAGE_NAME:-}" ]; then
+    PACKAGE_NAME="$(sed -n 's/^name *= *"\(.*\)"/\1/p' /app/pyproject.toml 2>/dev/null \
+                    | head -1 | tr '-' '_' | sed 's/_server$//')"
+fi
+
+# Getting this wrong used to be near-silent: the container started, connected,
+# ran migrations successfully, then failed to find the bootstrap command and
+# restarted forever — a database migrated by a server that never serves, caught
+# only by the health check. Check up front and say so instead.
+if [ -z "$PACKAGE_NAME" ]; then
+    echo "ERROR: could not determine the Python package name."
+    echo "       Expected a [project] name in /app/pyproject.toml, e.g."
+    echo '         name = "myproduct-server"   ->   package "myproduct"'
+    echo "       Set PACKAGE_NAME explicitly if this repo does not follow that convention."
+    exit 1
+fi
+if ! uv run --frozen --no-dev python -c \
+        "import shutil,sys; sys.exit(0 if shutil.which('${PACKAGE_NAME}_bootstrap') else 1)" \
+        >/dev/null 2>&1; then
+    echo "ERROR: no such command '${PACKAGE_NAME}_bootstrap' in this image."
+    echo "       The server repo must ship a '<package>_bootstrap' entry point, or"
+    echo "       PACKAGE_NAME must be set to whatever it does ship."
+    exit 1
+fi
+echo "==> Python package: $PACKAGE_NAME"
 
 # Secrets arrive as tmpfs files under /run/secrets rather than as environment
 # entries, so they stay out of `docker inspect` and /proc/<pid>/environ. The
