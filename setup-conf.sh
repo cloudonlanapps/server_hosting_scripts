@@ -160,7 +160,7 @@ PRODUCT_PROJECT="$(pc product project)"
 PRODUCT_GIT_URL="$(pc product git_url)"
 PRODUCT_PASS_PREFIX="$(pc product pass_prefix)"
 PRODUCT_STACK_PREFIX="$(pc product company_id '')"
-PRODUCT_NGINX_CLIENT_MAX_BODY_SIZE="$(pc product nginx_client_max_body_size '')"
+PRODUCT_MAX_UPLOAD_SIZE="$(pc product max_upload_size '')"
 
 # Derived, not declared: repeating them in every product config would be two
 # more values to get wrong for no decision gained.
@@ -310,8 +310,9 @@ render_conf() {
     echo "GIT_URL=\"$PRODUCT_GIT_URL\""
     echo "PASS_PREFIX=\"$PRODUCT_PASS_PREFIX\""
     [ -n "${PRODUCT_STACK_PREFIX:-}" ] && echo "STACK_PREFIX=\"$PRODUCT_STACK_PREFIX\""
-    [ -n "${PRODUCT_NGINX_CLIENT_MAX_BODY_SIZE:-}" ] && \
-        echo "NGINX_CLIENT_MAX_BODY_SIZE=\"$PRODUCT_NGINX_CLIENT_MAX_BODY_SIZE\""
+    # nginx's own name for it; the product config calls it max_upload_size.
+    [ -n "${PRODUCT_MAX_UPLOAD_SIZE:-}" ] && \
+        echo "NGINX_CLIENT_MAX_BODY_SIZE=\"$PRODUCT_MAX_UPLOAD_SIZE\""
     echo
     echo "# Only the environments this host serves. An environment absent here"
     echo "# cannot be deployed from this machine, which is the point."
