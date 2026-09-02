@@ -427,7 +427,7 @@ for e in "${CHOSEN[@]}"; do
 done
 echo
 if [ "$ASSUME_YES" != 1 ] && tty_ok; then
-    printf 'Proceed? [Y/n]: ' > /dev/tty
+    printf 'Write this configuration? [Y/n]: ' > /dev/tty
     read -r go < /dev/tty || true
     case "${go:-Y}" in [nN]*) echo "Aborted."; exit 1 ;; esac
 fi
