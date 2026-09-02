@@ -112,9 +112,10 @@ DEFAULT_ENVS="dev"
 #   [server_env]        env passthrough for every environment
 #   [server_env.<name>] env passthrough for one environment only
 #
-# In a passthrough value, {env} expands to the environment name and a leading @
-# means "read from pass" — which the deploy tooling already treats as the signal
-# to mount it as a secret file rather than an environment variable.
+# A leading @ means "read from pass" — which the deploy tooling already treats
+# as the signal to mount the value as a secret file rather than an environment
+# variable. Paths are absolute: nothing here assumes how a pass store is laid
+# out.
 declare -A PC          # "section.key" -> value
 declare -A PC_KEYS     # "section"     -> space-separated keys, in file order
 
@@ -151,19 +152,13 @@ env_ref() {
 # for itself; anything else in a section is passed to the server, upper-cased,
 # because that is what an environment variable looks like — a translation the
 # config should not have to carry.
-INSTALLER_KEYS=" company_id project git_url pass_prefix branch ref port websites "
+INSTALLER_KEYS=" company_id project git_url github_token branch ref port websites bootstrap_password postgres_password secret_key "
 is_server_key() { case "$INSTALLER_KEYS" in *" $1 "*) return 1 ;; *) return 0 ;; esac; }
 env_name() { printf '%s' "$1" | tr '[:lower:]' '[:upper:]'; }
 
-# A pass path is relative to pass_prefix, which is why pass_prefix exists.
-# Leading slash means absolute, for a secret kept outside the product's tree.
-pass_path() {
-    case "$1" in
-        @/*) printf '@%s' "${1#@/}" ;;
-        @*)  printf '@%s/%s' "$PRODUCT_PASS_PREFIX" "${1#@}" ;;
-        *)   printf '%s' "$1" ;;
-    esac
-}
+# The bare pass path behind an @value, for the secrets this tooling reads
+# itself rather than passing to the server.
+pass_of() { printf '%s' "${1#@}"; }
 
 # pc <section> <key> [default] — a missing key with no default is fatal, by name.
 pc() {
@@ -181,7 +176,7 @@ parse_product_conf "$DEFAULTS_FILE"
 
 PRODUCT_PROJECT="$(pc product project)"
 PRODUCT_GIT_URL="$(pc product git_url)"
-PRODUCT_PASS_PREFIX="$(pc product pass_prefix)"
+PRODUCT_GITHUB_TOKEN="$(pc product github_token)"
 PRODUCT_STACK_PREFIX="$(pc product company_id '')"
 
 # Derived, not declared: repeating them in every product config would be two
@@ -230,7 +225,7 @@ fetch_server_version() {
         *) echo "ERROR: cannot read owner/repo from GIT_URL: $url" >&2; return 1 ;;
     esac
     api="https://api.github.com/repos/${owner_repo}/contents/VERSION?ref=${ref}"
-    token="$(pass show "${PRODUCT_PASS_PREFIX}/github-token" 2>/dev/null | head -1 || true)"
+    token="$(pass show "$(pass_of "$PRODUCT_GITHUB_TOKEN")" 2>/dev/null | head -1 || true)"
     if [ -n "$token" ]; then
         out="$(curl -fsSL -H "Authorization: Bearer $token" \
                     -H "Accept: application/vnd.github.raw" "$api" 2>/dev/null || true)"
@@ -354,7 +349,7 @@ render_conf() {
     echo
     echo "PROJECT=\"$PRODUCT_PROJECT\""
     echo "GIT_URL=\"$PRODUCT_GIT_URL\""
-    echo "PASS_PREFIX=\"$PRODUCT_PASS_PREFIX\""
+    echo "GITHUB_TOKEN_PASS=\"$(pass_of "$PRODUCT_GITHUB_TOKEN")\""
     [ -n "${PRODUCT_STACK_PREFIX:-}" ] && echo "STACK_PREFIX=\"$PRODUCT_STACK_PREFIX\""
     # nginx caps the whole request, which is the file plus its multipart
     # envelope, so it sits a little above the file limit the server enforces.
@@ -367,9 +362,12 @@ render_conf() {
     echo
     for e in "${CHOSEN[@]}"; do
         pv="${e}_PORT"; _sites="$(pc "env.$e" websites '')"
-        echo "${e}_GIT_BRANCH=\"$(pc "env.$e" ref)\""
+        echo "${e}_GIT_BRANCH=\"$(env_ref "$e")\""
         echo "${e}_PORT=\"${!pv}\""
         [ -n "$_sites" ] && echo "${e}_ALLOWED_WEBSITES=\"$_sites\""
+        echo "${e}_BOOTSTRAP_PASSWORD_PASS=\"$(pass_of "$(pc "env.$e" bootstrap_password)")\""
+        echo "${e}_POSTGRES_PASSWORD_PASS=\"$(pass_of "$(pc "env.$e" postgres_password)")\""
+        echo "${e}_SECRET_KEY_PASS=\"$(pass_of "$(pc "env.$e" secret_key)")\""
         echo
     done
     echo "# Product identity, email settings and feature flags. A value starting"
@@ -379,9 +377,7 @@ render_conf() {
     for sect in product email_service; do
         for k in ${PC_KEYS[$sect]:-}; do
             is_server_key "$k" || continue
-            # {env} entries belong to one environment, so they go below.
-            case "${PC[$sect.$k]}" in *'{env}'*) continue ;; esac
-            echo "    \"$(env_name "$k")=$(pass_path "${PC[$sect.$k]}")\""
+            echo "    \"$(env_name "$k")=$(printf '%s' "${PC[$sect.$k]}")\""
         done
     done
     # Set from one answer so nginx and the server cannot disagree about it.
@@ -390,21 +386,12 @@ render_conf() {
     echo
     for e in "${CHOSEN[@]}"; do
         echo "${e}_EXTRA_ENV=(\"\${_COMMON_ENV[@]}\""
-        # Entries carrying {env}: one per environment, never shared. An
-        # encryption KEK is the reason this exists.
-        for sect in product email_service; do
-            for k in ${PC_KEYS[$sect]:-}; do
-                is_server_key "$k" || continue
-                case "${PC[$sect.$k]}" in
-                    *'{env}'*) echo "    \"$(env_name "$k")=$(pass_path "${PC[$sect.$k]//\{env\}/$e}")\"" ;;
-                esac
-            done
-        done
-        # Declared for this environment only.
+        # Everything declared for this environment: its own URLs, its own
+        # encryption key, its own email delivery.
         for sect in "env.$e" "email_service.$e"; do
             for k in ${PC_KEYS[$sect]:-}; do
                 is_server_key "$k" || continue
-                echo "    \"$(env_name "$k")=$(pass_path "${PC[$sect.$k]//\{env\}/$e}")\""
+                echo "    \"$(env_name "$k")=${PC[$sect.$k]}\""
             done
         done
         echo ")"
@@ -443,7 +430,7 @@ for e in "${CHOSEN[@]}"; do
         echo "ERROR: could not read VERSION from $PRODUCT_GIT_URL at '$_ref' (${ENV_LABEL[$e]:-$e})" >&2
         echo "       The version decides whether this run must ask you about new" >&2
         echo "       settings, so a failed read is not something to guess past." >&2
-        echo "       Check network access, and that ${PRODUCT_PASS_PREFIX}/github-token" >&2
+        echo "       Check network access, and that $(pass_of "$PRODUCT_GITHUB_TOKEN")" >&2
         echo "       is present and still valid for a private repo." >&2
         exit 1
     }

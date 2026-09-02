@@ -18,13 +18,13 @@ set -e
 # all per-env settings become optional.
 #
 # Optional:
-#   PASS_PREFIX          Pass key prefix (default: $PROJECT)
+#   <env>_BOOTSTRAP_PASSWORD_PASS / _POSTGRES_PASSWORD_PASS / _SECRET_KEY_PASS
+#   GITHUB_TOKEN_PASS    Full pass paths. PASS_PREFIX is the older form and is
+#                        still honoured when these are absent.
 #
-# Required pass entries (with prefix=$PASS_PREFIX):
+# Required pass entries (paths come from the conf):
 #   <prefix>/github-token
-#   <prefix>/<env>/bootstrap-password
-#   <prefix>/<env>/postgres-password
-#   <prefix>/<env>/secret-key
+#   the bootstrap password, the postgres password and the JWT secret key
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -102,7 +102,18 @@ if [ "$ENV" != "dev" ]; then
     done
 fi
 
-PASS_PREFIX="${PASS_PREFIX:-$PROJECT}"
+# Where each secret lives in `pass`. The conf names every path outright, so a
+# store can be laid out however its owner likes. PASS_PREFIX is the older form,
+# kept so a conf written before this still deploys.
+_pp() {  # _pp <conf-var> <legacy-suffix>
+    local v="${!1:-}"
+    if [ -n "$v" ]; then printf '%s' "$v"
+    else printf '%s/%s' "${PASS_PREFIX:-$PROJECT}" "$2"; fi
+}
+BOOTSTRAP_PASSWORD_PASS="$(_pp "${ENV}_BOOTSTRAP_PASSWORD_PASS" "${ENV}/bootstrap-password")"
+POSTGRES_PASSWORD_PASS="$(_pp "${ENV}_POSTGRES_PASSWORD_PASS" "${ENV}/postgres-password")"
+SECRET_KEY_PASS="$(_pp "${ENV}_SECRET_KEY_PASS" "${ENV}/secret-key")"
+GITHUB_TOKEN_PASS="$(_pp GITHUB_TOKEN_PASS github-token)"
 
 # Check pass is installed
 if ! command -v pass &> /dev/null; then
@@ -113,11 +124,11 @@ if ! command -v pass &> /dev/null; then
 fi
 
 # Required pass keys
-SHARED_KEYS=("${PASS_PREFIX}/github-token")
+SHARED_KEYS=("$GITHUB_TOKEN_PASS")
 ENV_KEYS=(
-    "${PASS_PREFIX}/${ENV}/bootstrap-password"
-    "${PASS_PREFIX}/${ENV}/postgres-password"
-    "${PASS_PREFIX}/${ENV}/secret-key"
+    "$BOOTSTRAP_PASSWORD_PASS"
+    "$POSTGRES_PASSWORD_PASS"
+    "$SECRET_KEY_PASS"
 )
 ALL_KEYS=("${SHARED_KEYS[@]}" "${ENV_KEYS[@]}")
 
@@ -143,10 +154,10 @@ if [ ${#MISSING[@]} -gt 0 ]; then
 fi
 
 # Retrieve secrets
-GITHUB_TOKEN=$(pass show "${PASS_PREFIX}/github-token")
-BOOTSTRAP_PASSWORD=$(pass show "${PASS_PREFIX}/${ENV}/bootstrap-password")
-POSTGRES_PASSWORD=$(pass show "${PASS_PREFIX}/${ENV}/postgres-password")
-SECRET_KEY=$(pass show "${PASS_PREFIX}/${ENV}/secret-key")
+GITHUB_TOKEN=$(pass show "$GITHUB_TOKEN_PASS")
+BOOTSTRAP_PASSWORD=$(pass show "$BOOTSTRAP_PASSWORD_PASS")
+POSTGRES_PASSWORD=$(pass show "$POSTGRES_PASSWORD_PASS")
+SECRET_KEY=$(pass show "$SECRET_KEY_PASS")
 
 # Optional generic extra-env passthrough: the conf may define
 #   <env>_EXTRA_ENV=( "NAME=literal" "NAME=@pass/key" ... )

@@ -9,7 +9,7 @@ set -e
 # per-env setting needed here (and only in non-dev mode).
 #
 # Conf must define PROJECT and ENVS=(...). For each non-dev env, also define
-# <env>_GIT_BRANCH. PASS_PREFIX defaults to $PROJECT.
+# <env>_GIT_BRANCH. Pass paths come from the conf; PASS_PREFIX is the older form.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -56,7 +56,17 @@ if [ "$ENV" != "dev" ] && [ -z "$GIT_BRANCH" ]; then
     exit 1
 fi
 
-PASS_PREFIX="${PASS_PREFIX:-$PROJECT}"
+# Where each secret lives in `pass`. The conf names every path outright, so a
+# store can be laid out however its owner likes. PASS_PREFIX is the older form,
+# kept so a conf written before this still deploys.
+_pp() {  # _pp <conf-var> <legacy-suffix>
+    local v="${!1:-}"
+    if [ -n "$v" ]; then printf '%s' "$v"
+    else printf '%s/%s' "${PASS_PREFIX:-$PROJECT}" "$2"; fi
+}
+BOOTSTRAP_PASSWORD_PASS="$(_pp "${ENV}_BOOTSTRAP_PASSWORD_PASS" "${ENV}/bootstrap-password")"
+POSTGRES_PASSWORD_PASS="$(_pp "${ENV}_POSTGRES_PASSWORD_PASS" "${ENV}/postgres-password")"
+SECRET_KEY_PASS="$(_pp "${ENV}_SECRET_KEY_PASS" "${ENV}/secret-key")"
 
 if ! command -v pass &> /dev/null; then
     echo "ERROR: 'pass' (password manager) is not installed."
@@ -64,9 +74,9 @@ if ! command -v pass &> /dev/null; then
 fi
 
 KEYS=(
-    "${PASS_PREFIX}/${ENV}/bootstrap-password"
-    "${PASS_PREFIX}/${ENV}/postgres-password"
-    "${PASS_PREFIX}/${ENV}/secret-key"
+    "$BOOTSTRAP_PASSWORD_PASS"
+    "$POSTGRES_PASSWORD_PASS"
+    "$SECRET_KEY_PASS"
 )
 
 MISSING=()
@@ -84,9 +94,9 @@ if [ ${#MISSING[@]} -gt 0 ]; then
     exit 1
 fi
 
-BOOTSTRAP_PASSWORD=$(pass show "${PASS_PREFIX}/${ENV}/bootstrap-password")
-POSTGRES_PASSWORD=$(pass show "${PASS_PREFIX}/${ENV}/postgres-password")
-SECRET_KEY=$(pass show "${PASS_PREFIX}/${ENV}/secret-key")
+BOOTSTRAP_PASSWORD=$(pass show "$BOOTSTRAP_PASSWORD_PASS")
+POSTGRES_PASSWORD=$(pass show "$POSTGRES_PASSWORD_PASS")
+SECRET_KEY=$(pass show "$SECRET_KEY_PASS")
 
 # Re-resolve the optional generic extra-env (same as deploy-conf.sh) so the
 # values are in this process env and survive the restart; only names forwarded.
