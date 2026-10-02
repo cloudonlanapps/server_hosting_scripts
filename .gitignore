@@ -1,2 +1,6 @@
 data/
 data-*/
+
+# A deployment directory (builds/<name>/) is host state created by a product
+# installer, never repo content. One was committed here by accident.
+builds/

@@ -124,11 +124,27 @@ _PROD_SECRETS=("ENCRYPTION_KEY=@secrets/myproduct/prod/encryption_key")
 prod_EXTRA_ENV=("${_IDENTITY_ENV[@]}" "${_PROD_SECRETS[@]}")
 ```
 
-**4. Optionally override nginx tuning** — read by `setup-nginx.sh`, taking
+**4. Optionally override nginx tuning** — read by `setup-nginx.sh` and
+`audit-security.sh` (both via `--conf`; `setup-nginx-conf.sh` passes it), taking
 precedence over `security.conf`:
 
 ```bash
 NGINX_CLIENT_MAX_BODY_SIZE="60M"     # must exceed the server's upload limit
+NGINX_AUTH_PATH="/v1/auth/"          # where the auth limit applies
+NGINX_API_PATH="/v1/"                # where the api limit applies
+NGINX_PUBLIC_WRITE_PATH="/v1/public/contact"     # optional; exact match, 429
+NGINX_RATE_PUBLIC_WRITE="3r/m"
+NGINX_PUBLIC_WRITE_BURST=5
+```
+
+The paths must be ones the app serves. nginx forwards the path unchanged, so
+the defaults (`/api/v1/auth/`, `/api/`) only help an app that serves under
+`/api/`; for any other app they never match, and every request quietly gets the
+general limit. Check what was generated, without root and without changing
+anything:
+
+```bash
+./setup-nginx.sh --domain api.example.com --port 9001 --conf <conf-file> --dry-run
 ```
 
 **5. Have the installer fetch this repo and write the deployment justfile.**
@@ -225,9 +241,10 @@ sudo ./audit-security.sh --domain <domain>:<port>      # check without changing
 ```
 
 `setup-nginx-conf.sh` takes the same `(conf, env)` pair as `deploy-conf.sh` and
-the rest: it reads the environment's port and its first allowed domain from the
-conf, confirms them, and calls `setup-nginx.sh`. Call that one directly only if
-you are configuring a domain the conf does not name.
+the rest: it reads the environment's port and its API domain (the host of its
+`server_base_url`) from the conf, confirms them, and calls `setup-nginx.sh`.
+Call that one directly only if you are configuring a domain the conf does not
+name.
 
 ### Not wired into the justfile
 
