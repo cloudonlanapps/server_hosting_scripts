@@ -100,22 +100,36 @@ if ! command -v ufw &> /dev/null; then
     apt-get install -y ufw
 fi
 
-# Reset UFW to default
-ufw --force reset
+# Additive, never a reset. This host may run things this tooling knows nothing
+# about (a VPN's port and forward rule, NTP), and a reset deleted their rules
+# along with ours. So: ensure the policies and our ports, leave the rest alone.
+
+# Enabling ufw over SSH on a port it does not allow cuts this session and the
+# host with it. Check before touching anything.
+SSH_SESSION_PORT="$(echo "${SSH_CONNECTION:-}" | awk '{print $4}')"
+if [ -n "$SSH_SESSION_PORT" ] && ! echo " $UFW_ALLOWED_PORTS " | grep -q " $SSH_SESSION_PORT "; then
+    if ! ufw status 2>/dev/null | grep -qE "^${SSH_SESSION_PORT}(/tcp)?[[:space:]].*ALLOW"; then
+        echo "ERROR: this SSH session is on port $SSH_SESSION_PORT, which neither UFW_ALLOWED_PORTS"
+        echo "       ($UFW_ALLOWED_PORTS) nor an existing rule allows. Enabling ufw would lock you out."
+        echo "       Add it to UFW_ALLOWED_PORTS in $CONFIG_FILE, or allow it by hand first."
+        exit 1
+    fi
+fi
 
 # Default policies
 ufw default $UFW_DEFAULT_INCOMING incoming
 ufw default $UFW_DEFAULT_OUTGOING outgoing
 
-# Allow configured ports
+# Allow configured ports (ufw skips a rule that already exists)
 for PORT in $UFW_ALLOWED_PORTS; do
     ufw allow ${PORT}/tcp
 done
 
-# Enable UFW
+# Enable UFW (a no-op beyond a reload when already active)
 ufw --force enable
 
-echo "    UFW configured. Allowed ports: $UFW_ALLOWED_PORTS"
+echo "    UFW configured. Ensured ports: $UFW_ALLOWED_PORTS"
+echo "    Rules not listed in security.conf are left as they are."
 ufw status verbose
 
 # ============================================

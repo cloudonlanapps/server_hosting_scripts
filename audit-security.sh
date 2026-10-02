@@ -157,13 +157,16 @@ for PORT in $UFW_ALLOWED_PORTS; do
     fi
 done
 
-# Check for unexpected ports
-ACTUAL_PORTS=$(echo "$UFW_STATUS" | grep "ALLOW" | grep -oP '^\d+' | sort -u)
-for ACTUAL_PORT in $ACTUAL_PORTS; do
-    if ! echo "$UFW_ALLOWED_PORTS" | grep -qw "$ACTUAL_PORT"; then
-        fail "No unexpected ports open" "only $UFW_ALLOWED_PORTS" "port $ACTUAL_PORT is also open"
+# Rules this tooling does not manage. setup-security.sh leaves them alone, so
+# they are reported for a person to judge, not failed: on a host that also runs
+# a VPN or a time server they are correct.
+while IFS= read -r RULE; do
+    RULE_PORT=$(echo "$RULE" | grep -oP '^\d+(?=/tcp\b)' || true)
+    if [ -n "$RULE_PORT" ] && echo " $UFW_ALLOWED_PORTS " | grep -q " $RULE_PORT "; then
+        continue
     fi
-done
+    warn "Not managed here (left as is): $(echo "$RULE" | tr -s ' ')"
+done < <(echo "$UFW_STATUS" | grep -E "[[:space:]](ALLOW|DENY|REJECT|LIMIT)[[:space:]]")
 
 # ============================================
 # 2. Nginx Rate Limiting

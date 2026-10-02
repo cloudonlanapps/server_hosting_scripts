@@ -240,6 +240,12 @@ sudo ./setup-security.sh --domain <domain>:<port>      # ufw, fail2ban, rate lim
 sudo ./audit-security.sh --domain <domain>:<port>      # check without changing
 ```
 
+`setup-security.sh` only adds: it sets ufw's default policies and allows
+`UFW_ALLOWED_PORTS`, and leaves every other rule as it is, so a host that also
+runs a VPN or NTP keeps their rules. `audit-security.sh` lists those as not
+managed here. It refuses to enable ufw if the SSH session's own port is not
+allowed.
+
 `setup-nginx-conf.sh` takes the same `(conf, env)` pair as `deploy-conf.sh` and
 the rest: it reads the environment's port and its API domain (the host of its
 `server_base_url`) from the conf, confirms them, and calls `setup-nginx.sh`.
