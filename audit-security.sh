@@ -2,8 +2,9 @@
 set -e
 
 # audit-security.sh - Read-only security audit
-# Usage: sudo ./audit-security.sh --domain <base_domain>
-# Checks server security configuration against security.conf requirements.
+# Usage: sudo ./audit-security.sh --domain <base_domain> [--conf FILE]
+# Checks server security configuration against security.conf requirements,
+# with a host conf's NGINX_* values taking precedence, as setup-nginx.sh does.
 # Does NOT make any changes - only reports PASS/FAIL.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -48,15 +49,17 @@ source "$CONFIG_FILE"
 
 DOMAINS=()
 STATIC_DOMAINS=()
+HOST_CONF=""
 
 # Parse arguments
 while [ $# -gt 0 ]; do
     case $1 in
         --help|-h)
-            echo "Usage: sudo ./audit-security.sh --domain <domain> [--domain <domain> ...] [--static-domain <domain> ...]"
+            echo "Usage: sudo ./audit-security.sh --domain <domain> [--domain <domain> ...] [--static-domain <domain> ...] [--conf FILE]"
             echo "Checks server security configuration against security.conf requirements."
             echo "  --domain: API proxy domains"
             echo "  --static-domain: Static website domains"
+            echo "  --conf: host conf whose NGINX_* values override security.conf (as setup-nginx.sh)"
             echo "Does NOT make any changes - only reports PASS/FAIL."
             exit 0
             ;;
@@ -74,9 +77,32 @@ while [ $# -gt 0 ]; do
         --static-domain=*)
             STATIC_DOMAINS+=("${1#*=}")
             ;;
+        --conf)
+            shift
+            HOST_CONF="${1:-}"
+            ;;
+        --conf=*)
+            HOST_CONF="${1#*=}"
+            ;;
     esac
     shift
 done
+
+# The same defaults and precedence as setup-nginx.sh, so the audit expects what
+# setup wrote rather than reporting a deployment's own overrides as failures.
+NGINX_AUTH_PATH="${NGINX_AUTH_PATH:-/api/v1/auth/}"
+NGINX_API_PATH="${NGINX_API_PATH:-/api/}"
+NGINX_PUBLIC_WRITE_PATH="${NGINX_PUBLIC_WRITE_PATH:-}"
+NGINX_RATE_PUBLIC_WRITE="${NGINX_RATE_PUBLIC_WRITE:-3r/m}"
+NGINX_PUBLIC_WRITE_BURST="${NGINX_PUBLIC_WRITE_BURST:-5}"
+if [ -n "$HOST_CONF" ]; then
+    if [ ! -f "$HOST_CONF" ]; then
+        echo "ERROR: --conf file not found: $HOST_CONF"
+        exit 1
+    fi
+    # shellcheck disable=SC1090
+    source "$HOST_CONF"
+fi
 
 # Check if running as root
 if [ "$EUID" -ne 0 ]; then
@@ -88,6 +114,7 @@ echo "=========================================="
 echo "Security Audit"
 echo "=========================================="
 echo "Config: $CONFIG_FILE"
+[ -n "$HOST_CONF" ] && echo "Host conf: $HOST_CONF"
 [ ${#DOMAINS[@]} -gt 0 ] && echo "API Domains: ${DOMAINS[*]}"
 [ ${#STATIC_DOMAINS[@]} -gt 0 ] && echo "Static Domains: ${STATIC_DOMAINS[*]}"
 echo ""
@@ -163,6 +190,15 @@ if [ -f "$RATE_CONF" ]; then
         fail "Auth rate limit" "$NGINX_RATE_AUTH" "$ACTUAL"
     fi
 
+    if [ -n "$NGINX_PUBLIC_WRITE_PATH" ]; then
+        if grep -q "zone=public_write_limit.*rate=${NGINX_RATE_PUBLIC_WRITE}" "$RATE_CONF"; then
+            pass "Public write rate limit: $NGINX_RATE_PUBLIC_WRITE"
+        else
+            ACTUAL=$(grep "zone=public_write_limit" "$RATE_CONF" | grep -oP 'rate=\S+' || echo "not found")
+            fail "Public write rate limit" "$NGINX_RATE_PUBLIC_WRITE" "$ACTUAL"
+        fi
+    fi
+
     if grep -q "zone=general_limit.*rate=${NGINX_RATE_GENERAL}" "$RATE_CONF"; then
         pass "General rate limit: $NGINX_RATE_GENERAL"
     else
@@ -187,6 +223,34 @@ audit_site_config() {
     fi
 
     echo "  --- ${SITE_DOMAIN} ---"
+
+    # The limits only bite if their locations are paths the app serves. A
+    # location for a path it does not serve reads correctly and never matches.
+    if grep -qF "location ${NGINX_AUTH_PATH} {" "$SITE_CONF"; then
+        pass "Auth limit applies at ${NGINX_AUTH_PATH}"
+    else
+        ACTUAL=$(grep -B2 "zone=auth_limit" "$SITE_CONF" | grep -oP 'location \S+' | head -1 || true)
+        fail "Auth limit location" "location ${NGINX_AUTH_PATH}" "${ACTUAL:-not found}"
+    fi
+    if grep -qF "location ${NGINX_API_PATH} {" "$SITE_CONF"; then
+        pass "API limit applies at ${NGINX_API_PATH}"
+    else
+        ACTUAL=$(grep -B2 "zone=api_limit" "$SITE_CONF" | grep -oP 'location \S+' | head -1 || true)
+        fail "API limit location" "location ${NGINX_API_PATH}" "${ACTUAL:-not found}"
+    fi
+    if [ -n "$NGINX_PUBLIC_WRITE_PATH" ]; then
+        if grep -qF "location = ${NGINX_PUBLIC_WRITE_PATH} {" "$SITE_CONF"; then
+            pass "Public write limit applies at ${NGINX_PUBLIC_WRITE_PATH}"
+        else
+            fail "Public write limit location" "location = ${NGINX_PUBLIC_WRITE_PATH}" "not found"
+        fi
+        if grep -q "zone=public_write_limit burst=${NGINX_PUBLIC_WRITE_BURST}" "$SITE_CONF"; then
+            pass "Public write burst=${NGINX_PUBLIC_WRITE_BURST}"
+        else
+            ACTUAL=$(grep "zone=public_write_limit" "$SITE_CONF" | grep -oP 'burst=\d+' || echo "not found")
+            fail "Public write burst" "burst=${NGINX_PUBLIC_WRITE_BURST}" "$ACTUAL"
+        fi
+    fi
 
     # Check auth burst
     if grep -q "zone=auth_limit burst=${NGINX_AUTH_BURST}" "$SITE_CONF"; then

@@ -179,6 +179,18 @@ pc() {
 
 parse_product_conf "$DEFAULTS_FILE"
 
+# [nginx] is for nginx alone: each key becomes NGINX_<KEY> in the host conf,
+# where setup-nginx.sh and audit-security.sh read it over security.conf. None
+# of it reaches the server. The upload size is not one of them: it is asked,
+# and one answer sets both nginx and the server so they cannot disagree.
+NGINX_KEYS=" auth_path api_path rate_api api_burst public_write_path rate_public_write public_write_burst "
+for k in ${PC_KEYS[nginx]:-}; do
+    case "$NGINX_KEYS" in
+        *" $k "*) ;;
+        *) echo "ERROR: $DEFAULTS_FILE: [nginx] $k is not a known nginx setting (${NGINX_KEYS# })" >&2; exit 1 ;;
+    esac
+done
+
 PRODUCT_PROJECT="$(pc product project)"
 PRODUCT_GIT_URL="$(pc product git_url)"
 PRODUCT_STACK_PREFIX="$(pc product company_id '')"
@@ -333,6 +345,17 @@ resolve_answers() {
 }
 
 
+# api_domain_of <url> — the host of an https URL, or nothing.
+api_domain_of() {
+    case "$1" in
+        https://*) ;;
+        *) return 0 ;;
+    esac
+    local h="${1#https://}"
+    h="${h%%/*}"; h="${h%%:*}"
+    printf '%s' "$h"
+}
+
 # ── Rendering the conf ──────────────────────────────────────────────────────
 # A function so the same text can be rendered to a scratch file and COMPARED
 # against the conf on disk. Version routing catches a new setting; only a
@@ -359,6 +382,9 @@ render_conf() {
     # envelope, so it sits a little above the file limit the server enforces.
     # Equal numbers would 413 an upload of exactly the permitted size.
     echo "NGINX_CLIENT_MAX_BODY_SIZE=\"$((MAX_UPLOAD_MB + 5))M\""
+    for k in ${PC_KEYS[nginx]:-}; do
+        echo "NGINX_$(env_name "$k")=\"${PC[nginx.$k]}\""
+    done
     echo
     echo "# Only the environments this host serves. An environment absent here"
     echo "# cannot be deployed from this machine, which is the point."
@@ -369,6 +395,12 @@ render_conf() {
         echo "${e}_GIT_BRANCH=\"$(env_ref "$e")\""
         echo "${e}_PORT=\"${!pv}\""
         [ -n "$_sites" ] && echo "${e}_ALLOWED_WEBSITES=\"$_sites\""
+        # The API's own public name, for nginx and its certificate. It is the
+        # host the server already declares as its base URL, so there is no
+        # second setting to disagree with it. Only an https URL has one: a dev
+        # environment reached by plain http on an IP gets no nginx at all.
+        _api_domain="$(api_domain_of "$(pc "env.$e" server_base_url '')")"
+        [ -n "$_api_domain" ] && echo "${e}_API_DOMAIN=\"$_api_domain\""
         echo "${e}_BOOTSTRAP_PASSWORD_PASS=\"$(pass_of "$(pc "env.$e" bootstrap_password)")\""
         echo "${e}_POSTGRES_PASSWORD_PASS=\"$(pass_of "$(pc "env.$e" postgres_password)")\""
         echo "${e}_SECRET_KEY_PASS=\"$(pass_of "$(pc "env.$e" secret_key)")\""

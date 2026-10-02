@@ -3,9 +3,9 @@ set -e
 
 # Usage: sudo ./setup-nginx-conf.sh <conf-file> <env>
 #
-# Wrapper around setup-nginx.sh. Resolves the environment's port and its first
-# allowed domain from the host conf, then configures nginx and requests a
-# certificate for that domain.
+# Wrapper around setup-nginx.sh. Resolves the environment's port and the API's
+# domain from the host conf, then configures nginx and requests a certificate
+# for that domain.
 #
 # Needs root. Does NOT need 'pass' — no secrets are read.
 #
@@ -47,22 +47,23 @@ if [ "$ENV_OK" = false ]; then
 fi
 
 PORT_VAR="${ENV}_PORT"
-SITES_VAR="${ENV}_ALLOWED_WEBSITES"
+DOMAIN_VAR="${ENV}_API_DOMAIN"
 PORT="${!PORT_VAR:-}"
-SITES="${!SITES_VAR:-}"
+DOMAIN="${!DOMAIN_VAR:-}"
 
 if [ -z "$PORT" ]; then
     echo "ERROR: $CONF_FILE must define $PORT_VAR"
     exit 1
 fi
-if [ -z "$SITES" ]; then
-    echo "ERROR: $CONF_FILE defines no $SITES_VAR — '$ENV' has no domain to configure"
+# Not <env>_ALLOWED_WEBSITES: those are the sites allowed to CALL the API (CORS),
+# not where it is served. Naming the vhost after the first of them put the API
+# on the website's domain.
+if [ -z "$DOMAIN" ]; then
+    echo "ERROR: $CONF_FILE defines no $DOMAIN_VAR — '$ENV' has no public API domain."
+    echo "       It is taken from the environment's server_base_url, and only an"
+    echo "       https:// URL gives one. Re-run the installer if the conf predates it."
     exit 1
 fi
-
-# The first entry is the certificate's primary name; the rest are aliases
-# handled by setup-nginx.sh from the same conf.
-DOMAIN="${SITES%%,*}"
 
 # Root last, not first: a wrong conf, a wrong env or an env with no domain are
 # all worth learning before being told to re-run under sudo.
