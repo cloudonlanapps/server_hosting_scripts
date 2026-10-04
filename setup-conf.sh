@@ -241,7 +241,8 @@ fetch_server_version() {  # <git-url> <ref> <token-pass-path>
         *) echo "ERROR: cannot read owner/repo from GIT_URL: $url" >&2; return 1 ;;
     esac
     api="https://api.github.com/repos/${owner_repo}/contents/VERSION?ref=${ref}"
-    token="$(pass show "$(pass_of "$3")" 2>/dev/null | head -1 || true)"
+    token=""
+    [ -n "$3" ] && token="$(pass show "$(pass_of "$3")" 2>/dev/null | head -1 || true)"
     if [ -n "$token" ]; then
         out="$(curl -fsSL -H "Authorization: Bearer $token" \
                     -H "Accept: application/vnd.github.raw" "$api" 2>/dev/null || true)"
@@ -404,7 +405,10 @@ render_conf() {
         echo "${e}_BOOTSTRAP_PASSWORD_PASS=\"$(pass_of "$(pc "env.$e" bootstrap_password)")\""
         echo "${e}_POSTGRES_PASSWORD_PASS=\"$(pass_of "$(pc "env.$e" postgres_password)")\""
         echo "${e}_SECRET_KEY_PASS=\"$(pass_of "$(pc "env.$e" secret_key)")\""
-        echo "${e}_GITHUB_TOKEN_PASS=\"$(pass_of "$(pc "env.$e" github_token)")\""
+        # Only a private repository needs a token; a public one is cloned
+        # anonymously, so an environment may name none.
+        _tok="$(pc "env.$e" github_token '')"
+        [ -n "$_tok" ] && echo "${e}_GITHUB_TOKEN_PASS=\"$(pass_of "$_tok")\""
         echo
     done
     echo "# Product identity, email settings and feature flags. A value starting"
@@ -463,11 +467,11 @@ echo "==> Reading the server's config-schema version"
 TARGET_VERSION=""
 for e in "${CHOSEN[@]}"; do
     _ref="$(env_ref "$e")"
-    _v="$(fetch_server_version "$PRODUCT_GIT_URL" "$_ref" "$(pc "env.$e" github_token)")" || {
+    _v="$(fetch_server_version "$PRODUCT_GIT_URL" "$_ref" "$(pc "env.$e" github_token '')")" || {
         echo "ERROR: could not read VERSION from $PRODUCT_GIT_URL at '$_ref' (${ENV_LABEL[$e]:-$e})" >&2
         echo "       The version decides whether this run must ask you about new" >&2
         echo "       settings, so a failed read is not something to guess past." >&2
-        echo "       Check network access, and that $(pass_of "$(pc "env.$e" github_token)")" >&2
+        echo "       Check network access, and that $(pass_of "$(pc "env.$e" github_token '(no token named)')")" >&2
         echo "       is present and still valid for a private repo." >&2
         exit 1
     }
