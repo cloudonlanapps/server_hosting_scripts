@@ -340,6 +340,29 @@ if ! command -v certbot &> /dev/null; then
     apt-get install -y certbot python3-certbot-nginx
 fi
 
+# other_default_server <nginx dir> — the first enabled config, other than this
+# script's own sites-enabled/default, whose `listen` claims default_server.
+# nginx allows one default server per address:port, so a host that already has
+# a catch-all (from another tool, or set up by hand) must not get a second:
+# `nginx -t` fails with "a duplicate default server".
+other_default_server() {
+    local dir="$1" f
+    for f in "$dir"/sites-enabled/* "$dir"/conf.d/*.conf; do
+        [ -f "$f" ] || continue
+        [ "$f" = "$dir/sites-enabled/default" ] && continue
+        if grep -v '^[[:space:]]*#' "$f" | grep -qE 'listen[^;]*default_server'; then
+            printf '%s' "$f"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# The block between here and the matching `fi` is left unindented on purpose:
+# its heredoc must keep its content and terminator at column 0.
+if EXISTING_DEFAULT="$(other_default_server /etc/nginx)"; then
+    echo "==> $EXISTING_DEFAULT is already the default server; not installing another"
+else
 # Create default server block to reject direct IP access (only if it doesn't exist)
 if [ ! -f /etc/nginx/sites-available/default ] || ! grep -q "default_server" /etc/nginx/sites-available/default 2>/dev/null; then
     echo "==> Creating default server block (blocks direct IP access)..."
@@ -376,6 +399,7 @@ if [ ! -f /etc/nginx/ssl/default.crt ]; then
 fi
 
 ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
+fi
 
 # Create rate limiting zones (idempotent - always overwrite)
 echo "==> Creating rate limiting zones..."
