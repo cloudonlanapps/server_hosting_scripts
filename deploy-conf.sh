@@ -115,7 +115,18 @@ _pp() {  # _pp <conf-var> <legacy-suffix>
 BOOTSTRAP_PASSWORD_PASS="$(_pp "${ENV}_BOOTSTRAP_PASSWORD_PASS" "${ENV}/bootstrap-password")"
 POSTGRES_PASSWORD_PASS="$(_pp "${ENV}_POSTGRES_PASSWORD_PASS" "${ENV}/postgres-password")"
 SECRET_KEY_PASS="$(_pp "${ENV}_SECRET_KEY_PASS" "${ENV}/secret-key")"
-GITHUB_TOKEN_PASS="$(_pp "${ENV}_GITHUB_TOKEN_PASS" github-token)"
+# The GitHub token is needed only to clone a private repository. A conf the
+# installer wrote (it carries CONF_SCHEMA_VERSION) names it per environment or
+# not at all: no name means the repository is public and the build clones it
+# anonymously. An older hand-written conf keeps the PASS_PREFIX fallback.
+_gh_var="${ENV}_GITHUB_TOKEN_PASS"
+if [ -n "${!_gh_var:-}" ]; then
+    GITHUB_TOKEN_PASS="${!_gh_var}"
+elif [ -z "${CONF_SCHEMA_VERSION:-}" ]; then
+    GITHUB_TOKEN_PASS="$(_pp "$_gh_var" github-token)"
+else
+    GITHUB_TOKEN_PASS=""
+fi
 
 # Check pass is installed
 if ! command -v pass &> /dev/null; then
@@ -126,7 +137,8 @@ if ! command -v pass &> /dev/null; then
 fi
 
 # Required pass keys
-SHARED_KEYS=("$GITHUB_TOKEN_PASS")
+SHARED_KEYS=()
+[ -n "$GITHUB_TOKEN_PASS" ] && SHARED_KEYS+=("$GITHUB_TOKEN_PASS")
 ENV_KEYS=(
     "$BOOTSTRAP_PASSWORD_PASS"
     "$POSTGRES_PASSWORD_PASS"
@@ -156,7 +168,8 @@ if [ ${#MISSING[@]} -gt 0 ]; then
 fi
 
 # Retrieve secrets
-GITHUB_TOKEN=$(pass show "$GITHUB_TOKEN_PASS")
+GITHUB_TOKEN=""
+[ -n "$GITHUB_TOKEN_PASS" ] && GITHUB_TOKEN=$(pass show "$GITHUB_TOKEN_PASS")
 BOOTSTRAP_PASSWORD=$(pass show "$BOOTSTRAP_PASSWORD_PASS")
 POSTGRES_PASSWORD=$(pass show "$POSTGRES_PASSWORD_PASS")
 SECRET_KEY=$(pass show "$SECRET_KEY_PASS")
@@ -186,8 +199,8 @@ ARGS=(
     --bootstrap-password "$BOOTSTRAP_PASSWORD"
     --postgres-password "$POSTGRES_PASSWORD"
     --secret-key "$SECRET_KEY"
-    --github-token "$GITHUB_TOKEN"
 )
+[ -n "$GITHUB_TOKEN" ] && ARGS+=(--github-token "$GITHUB_TOKEN")
 
 # Split by origin: literals are forwarded as environment variables, values that
 # came from `pass` are mounted as secret files. resolve_extra_env made the same
