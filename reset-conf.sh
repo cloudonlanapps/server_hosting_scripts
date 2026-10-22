@@ -116,4 +116,4 @@ echo "==> Clearing $STATIC_DIR ..."
 clear_target_dir "$STATIC_DIR"
 
 echo "==> Reset complete: $ENV is blank on $SSH_DESC (server left stopped)."
-echo "    Restore a backup:  restore-conf.sh $CONF_FILE $ENV <backup-dir>  (REMOTE=$REMOTE_MODE)"
+echo "    Restore a backup:  restore-backup.sh $CONF_FILE $ENV  (just restore-backup $ENV, on the host)"

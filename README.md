@@ -251,10 +251,3 @@ the rest: it reads the environment's port and its API domain (the host of its
 `server_base_url`) from the conf, confirms them, and calls `setup-nginx.sh`.
 Call that one directly only if you are configuring a domain the conf does not
 name.
-
-### Not wired into the justfile
-
-`backup-conf.sh`, `restore-conf.sh` and `verify-conf.sh` implement only the
-branch-based container naming and ignore `STACK_PREFIX`, so on a deployment
-that sets it they resolve names that do not exist. Call them directly only if
-your conf omits `STACK_PREFIX`.

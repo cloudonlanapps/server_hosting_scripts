@@ -140,9 +140,7 @@ else
 fi
 # STACK_PREFIX (conf) names the stack after its environment rather than its
 # branch. Both schemes must resolve here, or restore would look for containers
-# that do not exist. Note that backup-conf.sh / restore-conf.sh / verify-conf.sh
-# implement only the branch scheme, which is why they are not wired into the
-# justfile — see the README.
+# that do not exist.
 if [ -n "${STACK_PREFIX:-}" ]; then
     DATA_NAME="${STACK_PREFIX}_${PROJECT}_${ENV_ARG}"
     PG="${STACK_PREFIX}_${PROJECT}_postgres_${ENV_ARG}"
