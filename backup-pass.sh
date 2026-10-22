@@ -5,7 +5,7 @@ set -euo pipefail
 #
 # Point-in-time backup of the host's `pass` (password-store) secrets AND the
 # GPG key material needed to decrypt them, so the store is fully recoverable on
-# a clean machine. Companion to backup-conf.sh, same LOCAL/REMOTE idioms.
+# a clean machine.
 #
 # What it captures (the encrypted store on its own is useless without the key):
 #   - the password-store directory VERBATIM (rsync -a; the .gpg files are
@@ -20,9 +20,9 @@ set -euo pipefail
 #
 # The <conf-file> argument is OPTIONAL and only used to name the backup root
 # (PROJECT) and to supply SSH defaults in REMOTE mode; pass it for parity with
-# backup-conf.sh (`just backup-pass`).
+# the other recipes (`just backup-pass`).
 #
-# LOCAL vs REMOTE  (mirrors backup-conf.sh)
+# LOCAL vs REMOTE
 #   Default: back up THIS machine's store.
 #   REMOTE=1: pull the store + export the keys from a remote host over SSH,
 #   landing the artifacts LOCALLY (off-site pull). SSH details default to the
@@ -54,7 +54,7 @@ fi
 PROJECT="${PROJECT:-pass}"            # 'ihm' from the conf, else a bare 'pass'
 STORE_REL="${PASS_STORE_REL:-.password-store}"
 
-# --- Where do pass/gpg/rsync run: locally or over SSH? (as in backup-conf.sh) -
+# --- Where do pass/gpg/rsync run: locally or over SSH? ---------------------
 REMOTE_MODE=0
 SSH_DESC="local"
 if [ -n "${REMOTE:-}" ]; then

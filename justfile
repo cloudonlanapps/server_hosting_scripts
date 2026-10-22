@@ -90,11 +90,8 @@ backup-pass: _require-conf
 
 # ── Notes ─────────────────────────────────────────────────────────────────────
 #
-# backup-conf.sh, restore-conf.sh and verify-conf.sh are deliberately NOT wired
-# in. They derive container names from the branch scheme only and ignore
-# STACK_PREFIX, so on a deployment that sets it they resolve names that do not
-# exist. They remain in the repo for the push-model deployments they were
-# written for.
+# Backups are taken outside this repo (udesktop's backup chain); restore-backup.sh
+# (`just restore-backup`) loads them.
 #
 # nginx is configured once, by the installer, via setup-nginx.sh. There is no
 # recipe to re-install it: the vhost is generated and then rewritten in place by
