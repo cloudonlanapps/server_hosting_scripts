@@ -135,7 +135,7 @@ NGINX_API_PATH="/v1/"                # where the api limit applies
 NGINX_PUBLIC_WRITE_PATH="/v1/public/contact"     # optional; exact match, 429
 NGINX_RATE_PUBLIC_WRITE="3r/m"
 NGINX_PUBLIC_WRITE_BURST=5
-NGINX_HSTS_MAX_AGE=300               # HSTS on HTTPS; raise to 31536000 once proven
+NGINX_HSTS_MAX_AGE=31536000          # HSTS on HTTPS: one year
 ```
 
 The paths must be ones the app serves. nginx forwards the path unchanged, so
