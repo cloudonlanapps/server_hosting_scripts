@@ -114,11 +114,13 @@ echo "==> Restarting ${PROJECT} [${ENV}]"
 STACK_NAME=""
 [ -n "${STACK_PREFIX:-}" ] && STACK_NAME="${STACK_PREFIX}_${PROJECT}_${ENV}"
 
+# Secrets go to restart.sh in its environment, never on its command line (#25).
+export DEPLOY_BOOTSTRAP_PASSWORD="$BOOTSTRAP_PASSWORD"
+export DEPLOY_POSTGRES_PASSWORD="$POSTGRES_PASSWORD"
+export DEPLOY_SECRET_KEY="$SECRET_KEY"
+
 ARGS=(
     --project "$PROJECT"
-    --bootstrap-password "$BOOTSTRAP_PASSWORD"
-    --postgres-password "$POSTGRES_PASSWORD"
-    --secret-key "$SECRET_KEY"
 )
 
 # Split by origin: literals are forwarded as environment variables, values that
