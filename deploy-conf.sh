@@ -193,14 +193,17 @@ echo "==> Deploying ${PROJECT} [${ENV}] (branch: ${GIT_BRANCH:-repo default}, po
 STACK_NAME=""
 [ -n "${STACK_PREFIX:-}" ] && STACK_NAME="${STACK_PREFIX}_${PROJECT}_${ENV}"
 
+# Secrets go to deploy.sh in its environment, never on its command line, which
+# every local user can read (#25).
+export DEPLOY_BOOTSTRAP_PASSWORD="$BOOTSTRAP_PASSWORD"
+export DEPLOY_POSTGRES_PASSWORD="$POSTGRES_PASSWORD"
+export DEPLOY_SECRET_KEY="$SECRET_KEY"
+[ -n "$GITHUB_TOKEN" ] && export DEPLOY_GITHUB_TOKEN="$GITHUB_TOKEN"
+
 ARGS=(
     --project "$PROJECT"
     --git-url "$GIT_URL"
-    --bootstrap-password "$BOOTSTRAP_PASSWORD"
-    --postgres-password "$POSTGRES_PASSWORD"
-    --secret-key "$SECRET_KEY"
 )
-[ -n "$GITHUB_TOKEN" ] && ARGS+=(--github-token "$GITHUB_TOKEN")
 
 # Split by origin: literals are forwarded as environment variables, values that
 # came from `pass` are mounted as secret files. resolve_extra_env made the same

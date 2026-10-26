@@ -47,9 +47,11 @@ show_usage() {
 }
 
 PROJECT_NAME=""
-BOOTSTRAP_PASSWORD=""
-POSTGRES_PASSWORD=""
-SECRET_KEY=""
+# The secrets may come from the environment instead of flags (#25); see
+# deploy.sh. A flag, when given, wins.
+BOOTSTRAP_PASSWORD="${DEPLOY_BOOTSTRAP_PASSWORD:-}"
+POSTGRES_PASSWORD="${DEPLOY_POSTGRES_PASSWORD:-}"
+SECRET_KEY="${DEPLOY_SECRET_KEY:-}"
 DEV_MODE=false
 GIT_BRANCH=""
 STACK_NAME=""
@@ -135,6 +137,8 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+unset DEPLOY_BOOTSTRAP_PASSWORD DEPLOY_POSTGRES_PASSWORD DEPLOY_SECRET_KEY
 
 # Validate required arguments
 if [ -z "$PROJECT_NAME" ] || [ -z "$BOOTSTRAP_PASSWORD" ] || [ -z "$POSTGRES_PASSWORD" ] || [ -z "$SECRET_KEY" ]; then

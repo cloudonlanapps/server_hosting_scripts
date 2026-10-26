@@ -26,6 +26,12 @@ source "./lib_extra_env.sh"
 #   --reset             Drop all tables before starting (fresh database)
 #   --secret-key KEY    JWT signing key, REQUIRED (changing it invalidates existing user sessions)
 #   --github-token TOK  GitHub token for cloning private repo
+#
+# Secrets in the environment (#25): DEPLOY_BOOTSTRAP_PASSWORD,
+# DEPLOY_POSTGRES_PASSWORD, DEPLOY_SECRET_KEY and DEPLOY_GITHUB_TOKEN stand in
+# for the four flags above. A command line is readable by every local user
+# (ps, /proc/<pid>/cmdline); a process's environment only by its owner and
+# root, so deploy-conf.sh passes them this way. A flag, when given, wins.
 #   --package-name NAME Python package installed in the server image, if it differs
 #                       from --project (default: same as --project)
 #   --stack-name NAME   Names the docker stack, its containers and its data dir.
@@ -108,10 +114,10 @@ STACK_NAME=""
 DB_CONTAINER_ARG=""
 SERVER_CONTAINER_ARG=""
 GIT_URL=""
-BOOTSTRAP_PASSWORD=""
-POSTGRES_PASSWORD=""
-SECRET_KEY=""
-GITHUB_TOKEN=""
+BOOTSTRAP_PASSWORD="${DEPLOY_BOOTSTRAP_PASSWORD:-}"
+POSTGRES_PASSWORD="${DEPLOY_POSTGRES_PASSWORD:-}"
+SECRET_KEY="${DEPLOY_SECRET_KEY:-}"
+GITHUB_TOKEN="${DEPLOY_GITHUB_TOKEN:-}"
 RESET_DB=false
 DEV_MODE=false
 GIT_BRANCH=""
@@ -257,6 +263,9 @@ while [ $# -gt 0 ]; do
     shift
 done
 
+# The values are read; nothing this script starts needs a second copy.
+unset DEPLOY_BOOTSTRAP_PASSWORD DEPLOY_POSTGRES_PASSWORD DEPLOY_SECRET_KEY DEPLOY_GITHUB_TOKEN
+
 # Check prerequisites
 if ! command -v docker &> /dev/null; then
     echo "ERROR: Docker is not installed. Install Docker first."
@@ -271,7 +280,7 @@ fi
 
 # Validate required arguments
 if [ -z "$PROJECT_NAME" ] || [ -z "$GIT_URL" ] || [ -z "$BOOTSTRAP_PASSWORD" ] || [ -z "$POSTGRES_PASSWORD" ]; then
-    echo "ERROR: --project, --git-url, --bootstrap-password, and --postgres-password are required"
+    echo "ERROR: --project, --git-url, --bootstrap-password (or DEPLOY_BOOTSTRAP_PASSWORD), and --postgres-password (or DEPLOY_POSTGRES_PASSWORD) are required"
     show_usage
     exit 1
 fi
@@ -311,7 +320,7 @@ fi
 # restart.sh has always required it. deploy-conf.sh reads it from `pass`, so the
 # conf-driven path is unaffected.
 if [ -z "$SECRET_KEY" ]; then
-    echo "ERROR: --secret-key is required." >&2
+    echo "ERROR: --secret-key (or DEPLOY_SECRET_KEY) is required." >&2
     echo "       It signs JWTs, so it must persist across deploys — a fresh key" >&2
     echo "       invalidates every existing session." >&2
     echo "       Generate once and store it, then pass it on every deploy:" >&2
