@@ -95,6 +95,7 @@ NGINX_API_PATH="${NGINX_API_PATH:-/api/}"
 NGINX_PUBLIC_WRITE_PATH="${NGINX_PUBLIC_WRITE_PATH:-}"
 NGINX_RATE_PUBLIC_WRITE="${NGINX_RATE_PUBLIC_WRITE:-3r/m}"
 NGINX_PUBLIC_WRITE_BURST="${NGINX_PUBLIC_WRITE_BURST:-5}"
+NGINX_HSTS_MAX_AGE="${NGINX_HSTS_MAX_AGE:-300}"
 if [ -n "$HOST_CONF" ]; then
     if [ ! -f "$HOST_CONF" ]; then
         echo "ERROR: --conf file not found: $HOST_CONF"
@@ -312,12 +313,66 @@ audit_site_config() {
     fi
 }
 
+# Fetch the response headers nginx on this host sends for a domain, without
+# DNS: the request goes to 127.0.0.1 with the domain as its name. -k because
+# this checks headers, not the certificate. Prints the headers, lower-cased;
+# returns curl's status, so a failed request is not read as "no header".
+fetch_headers() {  # fetch_headers <http|https> <domain>
+    local scheme="$1" domain="$2" port=80 out rc=0
+    [ "$scheme" = https ] && port=443
+    out=$(curl -sk --max-time 10 -o /dev/null -D - \
+        --resolve "${domain}:${port}:127.0.0.1" "${scheme}://${domain}/health") || rc=$?
+    [ $rc -eq 0 ] || return $rc
+    printf '%s\n' "$out" | tr -d '\r' | tr '[:upper:]' '[:lower:]'
+}
+
+# HSTS on the HTTPS response, and no nginx version in the Server header on
+# either scheme (port 80 is certbot's redirect server, not the vhost itself).
+audit_live_headers() {
+    local domain="${1%%:*}" scheme headers rc server hsts
+    local want_hsts="max-age=${NGINX_HSTS_MAX_AGE}"
+
+    for scheme in https http; do
+        rc=0
+        headers=$(fetch_headers "$scheme" "$domain") || rc=$?
+        if [ $rc -ne 0 ]; then
+            fail "${scheme}://${domain} answers" "a response from nginx on 127.0.0.1" "curl exit $rc"
+            continue
+        fi
+
+        server=$(printf '%s\n' "$headers" | grep -m1 '^server:' | sed 's/^server:[[:space:]]*//' || true)
+        if [ -z "$server" ]; then
+            warn "${scheme}://${domain}: no Server header"
+        elif printf '%s' "$server" | grep -q '/'; then
+            fail "${scheme}://${domain}: no version in Server header" "nginx" "$server"
+        else
+            pass "${scheme}://${domain}: Server header carries no version ($server)"
+        fi
+
+        [ "$scheme" = https ] || continue
+        hsts=$(printf '%s\n' "$headers" | grep -m1 '^strict-transport-security:' \
+            | sed 's/^strict-transport-security:[[:space:]]*//' || true)
+        if [ "$hsts" = "$want_hsts" ]; then
+            pass "https://${domain}: Strict-Transport-Security: $hsts"
+        else
+            fail "https://${domain}: Strict-Transport-Security" "$want_hsts" "${hsts:-not sent}"
+        fi
+    done
+}
+
 if [ ${#DOMAINS[@]} -gt 0 ]; then
     echo ""
     echo "==> Nginx Site Configs"
 
     for SITE_DOMAIN in "${DOMAINS[@]}"; do
         audit_site_config "$SITE_DOMAIN" "false"
+    done
+
+    echo ""
+    echo "==> Nginx Response Headers"
+
+    for SITE_DOMAIN in "${DOMAINS[@]}"; do
+        audit_live_headers "$SITE_DOMAIN"
     done
 else
     echo ""
