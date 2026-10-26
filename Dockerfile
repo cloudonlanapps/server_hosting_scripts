@@ -170,6 +170,14 @@ RUN --mount=type=secret,id=gh_token \
 # Install dependencies (without dev dependencies)
 RUN uv sync --frozen --no-dev
 
+# The app checks outbound TLS against certifi, which still trusts emSign
+# Root CA - G1 while the hosts and the system store above distrust every
+# emSign root. Remove them from the app's bundle too; the script fails the
+# build if one is left.
+COPY distrust-emsign-certifi.py /tmp/distrust-emsign-certifi.py
+RUN /app/.venv/bin/python -I /tmp/distrust-emsign-certifi.py \
+    && rm /tmp/distrust-emsign-certifi.py
+
 # Copy entrypoint script
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
