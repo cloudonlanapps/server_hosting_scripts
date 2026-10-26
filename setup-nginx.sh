@@ -121,7 +121,7 @@ NGINX_API_PATH="${NGINX_API_PATH:-/api/}"
 NGINX_PUBLIC_WRITE_PATH="${NGINX_PUBLIC_WRITE_PATH:-}"
 NGINX_RATE_PUBLIC_WRITE="${NGINX_RATE_PUBLIC_WRITE:-3r/m}"
 NGINX_PUBLIC_WRITE_BURST="${NGINX_PUBLIC_WRITE_BURST:-5}"
-NGINX_HSTS_MAX_AGE="${NGINX_HSTS_MAX_AGE:-300}"
+NGINX_HSTS_MAX_AGE="${NGINX_HSTS_MAX_AGE:-31536000}"
 
 # The host conf wins over security.conf: it is where a deployment says which
 # paths its app serves and how large its uploads are.
