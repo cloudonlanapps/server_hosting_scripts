@@ -35,6 +35,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm /tmp/magick.AppImage \
     && magick -version | head -1
 
+# Distrust every emSign root (eMudhra CA incident, October 2026), as the
+# hosts do. Debian's ca-certificates still ships some of them, so mark each
+# one with "!" in ca-certificates.conf and rebuild /etc/ssl/certs. The build
+# fails if any is left.
+RUN sed -i 's|^\(mozilla/emSign_.*\)$|!\1|' /etc/ca-certificates.conf \
+    && update-ca-certificates --fresh >/dev/null \
+    && if ls /etc/ssl/certs | grep -qi emsign; then \
+        echo "ERROR: an emSign root is still trusted"; exit 1; \
+    fi \
+    && echo "no emSign roots in /etc/ssl/certs"
+
+# The base image's pip lags behind security fixes; 26.2.2 is the oldest
+# release with the emSign fix.
+ARG PIP_MIN=26.2.2
+RUN pip install --no-cache-dir --root-user-action=ignore --upgrade "pip>=${PIP_MIN}" \
+    && PIP_VERSION="$(pip --version | cut -d' ' -f2)" \
+    && if [ "$(printf '%s\n' "$PIP_MIN" "$PIP_VERSION" | sort -V | head -1)" != "$PIP_MIN" ]; then \
+        echo "ERROR: pip $PIP_VERSION is older than $PIP_MIN"; exit 1; \
+    fi \
+    && echo "pip $PIP_VERSION"
+
 # Build-time smoke test of the upload-conversion pipeline. The tools we
 # just installed (magick / ffmpeg) are themselves used to synthesize tiny
 # sample inputs, then we run them through the same conversions the
@@ -65,8 +86,11 @@ RUN set -e \
 
 WORKDIR /app
 
-# Install uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# Install uv. Pinned to a release: ":latest" resolves to whatever copy the
+# build host already holds, even with --no-cache, so it can go stale.
+# Bump this to upgrade uv.
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /usr/local/bin/uv
+RUN uv --version
 
 # Clone source from GitHub using HTTPS.
 #
@@ -145,6 +169,14 @@ RUN --mount=type=secret,id=gh_token \
 
 # Install dependencies (without dev dependencies)
 RUN uv sync --frozen --no-dev
+
+# The app checks outbound TLS against certifi, which still trusts emSign
+# Root CA - G1 while the hosts and the system store above distrust every
+# emSign root. Remove them from the app's bundle too; the script fails the
+# build if one is left.
+COPY distrust-emsign-certifi.py /tmp/distrust-emsign-certifi.py
+RUN /app/.venv/bin/python -I /tmp/distrust-emsign-certifi.py \
+    && rm /tmp/distrust-emsign-certifi.py
 
 # Copy entrypoint script
 COPY entrypoint.sh /entrypoint.sh
