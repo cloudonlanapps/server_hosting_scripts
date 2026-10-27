@@ -11,6 +11,11 @@ FROM ${BASE_IMAGE}
 
 WORKDIR /app
 
+# Everything from here is rebuilt on every deploy: deploy.sh passes a new
+# DEPLOY_ID each time, and its first use below (the clone) misses the cache.
+# This stands in for --no-cache, which would also empty the uv cache mount.
+ARG DEPLOY_ID=
+
 # Clone source from GitHub using HTTPS.
 #
 # For private repos the token arrives as a BuildKit secret mounted at
@@ -42,7 +47,7 @@ RUN --mount=type=secret,id=gh_token \
         CLONE_URL="https://${GH_TOKEN}@${GIT_URL#https://}"; \
         unset GH_TOKEN; \
     fi; \
-    echo "==> Fetching ${REPO_REF}"; \
+    echo "==> Deploy ${DEPLOY_ID}: fetching ${REPO_REF}"; \
     if git clone --branch "$REPO_REF" --single-branch "$CLONE_URL" /app 2>/tmp/clone_err; then \
         echo "==> Checked out ${REPO_REF} (branch or tag)"; \
     else \
@@ -89,8 +94,8 @@ RUN --mount=type=secret,id=gh_token \
 # Install dependencies (without dev dependencies).
 #
 # uv's download cache is a BuildKit cache mount, kept on the host across
-# builds (--no-cache does not clear it), so a deploy downloads only the
-# packages this host has not fetched before; uv.lock's hashes still check
+# builds (one run with --no-cache gets an empty one), so a deploy downloads
+# only the packages this host has not fetched before; uv.lock's hashes check
 # every one. The venv gets copies, since the cache is not in the image.
 #
 # UV_OFFLINE set (any value) installs from that cache alone, never asking

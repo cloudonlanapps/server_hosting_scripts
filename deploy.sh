@@ -532,8 +532,13 @@ fi
 
 # Build while the old stack still runs: a build that fails (a slow PyPI, a
 # broken clone) leaves it up, and the outage is only the restart.
+# No --no-cache: it would also empty uv's cache mount. DEPLOY_ID, new each
+# time, makes the clone and every step after it run again instead; the
+# template's layers are this host's own image and are never rebuilt here.
 echo "==> Building the image on $BASE_IMAGE..."
-docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILES[@]}" build --no-cache
+DEPLOY_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+export DEPLOY_ID
+docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILES[@]}" build
 
 echo "==> Stopping existing containers for $COMPOSE_PROJECT_NAME..."
 docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILES[@]}" down 2>/dev/null || true
