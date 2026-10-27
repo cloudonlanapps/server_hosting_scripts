@@ -111,6 +111,11 @@ RUN --mount=type=cache,id=server_hosting_uv,target=/root/.cache/uv \
         env -u UV_OFFLINE uv sync --frozen --no-dev; \
     fi
 
+# The venv is complete once built, and the cache above is not in the image:
+# entrypoint.sh's `uv run` must use the venv as it is, not sync it again,
+# which would ask PyPI for the build backend on every start.
+ENV UV_NO_SYNC=1
+
 # The app checks outbound TLS against certifi, which still trusts emSign
 # Root CA - G1 while the hosts and the system store above distrust every
 # emSign root. Remove them from the app's bundle too; the script fails the
