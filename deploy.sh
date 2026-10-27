@@ -481,6 +481,36 @@ if [ -n "$EXTRA_ENV_NAMES$EXTRA_SECRET_ENV_NAMES" ]; then
     COMPOSE_FILES+=(-f "$OVERRIDE_FILE")
 fi
 
+# The template (Dockerfile.base) is built once per host and kept. A deploy
+# builds it when this host has none for this Dockerfile.base, and otherwise
+# offers to rebuild it, taking security updates (answer yes on the first deploy
+# after a release is cut). No terminal means no question: the template is
+# reused. This runs before the stack is stopped, so a slow or failed template
+# build leaves the running server alone. DEBIAN_MIRROR and
+# DEBIAN_SECURITY_MIRROR, if set, pick the mirrors for a build.
+BASE_IMAGE="$(./refresh-base.sh --print-tag)"
+BASE_STATUS=0
+BASE_BUILT="$(./refresh-base.sh --check)" || BASE_STATUS=$?
+case "$BASE_STATUS" in
+    0)
+        echo "==> Template $BASE_IMAGE, built $BASE_BUILT"
+        if { true >/dev/tty; } 2>/dev/null; then
+            printf 'Rebuild the template now, taking security updates? [y/N]: ' > /dev/tty
+            read -r _go < /dev/tty || true
+            case "${_go:-N}" in [yY]*) ./refresh-base.sh ;; *) echo "    Reusing it." ;; esac
+        fi
+        ;;
+    1)
+        echo "==> No template $BASE_IMAGE on this host yet; building it."
+        ./refresh-base.sh
+        ;;
+    *)
+        echo "ERROR: could not check for the template $BASE_IMAGE" >&2
+        exit 1
+        ;;
+esac
+export BASE_IMAGE
+
 # A deploy takes the stack down, rebuilds the image and brings it back, so on a
 # live environment it is an outage. Say so and ask, when there is something
 # running and someone to ask. No terminal means no prompt, so CI is unaffected.
@@ -491,7 +521,7 @@ if [ "${RUNNING:-0}" -gt 0 ] && { true >/dev/tty; } 2>/dev/null; then
     docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILES[@]}" ps --status running \
         --format '    {{.Name}}  {{.Status}}' 2>/dev/null || true
     echo
-    echo "Deploying stops it, rebuilds the image and starts it again."
+    echo "Deploying rebuilds the image, then stops it and starts it again."
     if [ "$RESET_DB" = true ]; then
         echo "--reset will ALSO delete the database at $DATA_DIR/db."
     fi
@@ -499,6 +529,16 @@ if [ "${RUNNING:-0}" -gt 0 ] && { true >/dev/tty; } 2>/dev/null; then
     read -r _go < /dev/tty || true
     case "${_go:-N}" in [yY]*) ;; *) echo "Aborted."; exit 1 ;; esac
 fi
+
+# Build while the old stack still runs: a build that fails (a slow PyPI, a
+# broken clone) leaves it up, and the outage is only the restart.
+# No --no-cache: it would also empty uv's cache mount. DEPLOY_ID, new each
+# time, makes the clone and every step after it run again instead; the
+# template's layers are this host's own image and are never rebuilt here.
+echo "==> Building the image on $BASE_IMAGE..."
+DEPLOY_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+export DEPLOY_ID
+docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILES[@]}" build
 
 echo "==> Stopping existing containers for $COMPOSE_PROJECT_NAME..."
 docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILES[@]}" down 2>/dev/null || true
@@ -510,8 +550,7 @@ if [ "$RESET_DB" = true ]; then
     echo "    Database data cleared from $DATA_DIR/db"
 fi
 
-echo "==> Building and starting containers..."
-docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILES[@]}" build --no-cache
+echo "==> Starting containers..."
 docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILES[@]}" up -d
 
 # Function to wait for containers to become healthy
