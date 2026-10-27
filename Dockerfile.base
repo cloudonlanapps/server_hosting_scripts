@@ -30,7 +30,12 @@ ARG DEBIAN_SECURITY_MIRROR=
 # python image was published.
 ENV DEBIAN_FRONTEND=noninteractive
 ENV DEBCONF_NONINTERACTIVE_SEEN=true
-RUN SOURCES=/etc/apt/sources.list.d/debian.sources \
+#
+# The build context is empty unless refresh-base.sh was given --imagemagick
+# FILE: then it holds that file as magick.AppImage, used in place of the
+# download below and checked against the same SHA-256.
+RUN --mount=type=bind,source=.,target=/ctx \
+    SOURCES=/etc/apt/sources.list.d/debian.sources \
     && cp "$SOURCES" /tmp/debian.sources.orig \
     && if [ -n "$DEBIAN_MIRROR" ]; then \
         sed -i "s|http://deb.debian.org/debian\$|${DEBIAN_MIRROR}|" "$SOURCES"; \
@@ -57,8 +62,13 @@ RUN SOURCES=/etc/apt/sources.list.d/debian.sources \
     # before installing. Bump IM_VERSION + IM_SHA256 together to upgrade.
     && IM_VERSION=7.1.2-23 \
     && IM_SHA256=394276441870822786a8bb0ef8ec56db744567d2662ba5c1e1404e2ad969a28b \
-    && wget -O /tmp/magick.AppImage \
-        "https://github.com/ImageMagick/ImageMagick/releases/download/${IM_VERSION}/ImageMagick-${IM_VERSION}-gcc-x86_64.AppImage" \
+    && if [ -f /ctx/magick.AppImage ]; then \
+        echo "ImageMagick: the file given to refresh-base.sh"; \
+        cp /ctx/magick.AppImage /tmp/magick.AppImage; \
+    else \
+        wget -O /tmp/magick.AppImage \
+            "https://github.com/ImageMagick/ImageMagick/releases/download/${IM_VERSION}/ImageMagick-${IM_VERSION}-gcc-x86_64.AppImage"; \
+    fi \
     && echo "${IM_SHA256}  /tmp/magick.AppImage" | sha256sum -c - \
     && chmod +x /tmp/magick.AppImage \
     # Docker has no FUSE, so extract the AppImage instead of executing it.

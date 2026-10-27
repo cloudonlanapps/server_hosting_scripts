@@ -196,11 +196,42 @@ Run `just` from the deployment directory. `<env>` is any name in `ENVS`.
 ```bash
 just --list                # every recipe
 just deploy <env>          # rebuild the image and restart the stack
+just refresh-base          # rebuild this host's template image, taking security updates
 just restart <env>         # restart using the saved config
 just stop <env>            # stop the stack
 just reset <env>           # DESTRUCTIVE: empty the database, clear uploads and static
 just backup-pass           # back up the pass store and its GPG key material
 ```
+
+### The template image
+
+A deploy's image is two parts. The **template** (`Dockerfile.base`) is the
+system layer: Debian packages, ImageMagick, pip and uv. It holds no secret and
+no checkout, and it is built once per host and kept. The **app image**
+(`Dockerfile`) starts from it and adds the server's code; a deploy rebuilds only
+this.
+
+The template is tagged `server_hosting_base:<hash of Dockerfile.base>`, so
+every product on a host at the same tooling version shares one, and a tooling
+version that changes `Dockerfile.base` gets its own.
+
+A deploy builds the template when the host has none for its `Dockerfile.base`.
+Otherwise it shows when the template was built and asks whether to rebuild it
+from scratch, taking security updates (default no). A kept template takes no
+updates, so answer yes on the first deploy to each host after a release is cut.
+Without a terminal the deploy reuses it. Either way this happens before the
+stack is stopped. `just refresh-base` rebuilds it without deploying.
+
+When the default Debian mirror is slow from a host, pick another for that build,
+on the command line or with `DEBIAN_MIRROR` / `DEBIAN_SECURITY_MIRROR` set for a
+deploy:
+
+```bash
+just refresh-base --mirror http://mirror.sg.gs/debian \
+                  --security-mirror http://mirror.sg.gs/debian-security
+```
+
+What went into a template: `docker run --rm <tag> cat /etc/server_hosting_base.txt`.
 
 ### Restore
 

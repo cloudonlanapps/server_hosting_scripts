@@ -14,8 +14,9 @@ set -euo pipefail
 #   ./refresh-base.sh                 Rebuild from scratch: pull the newest
 #                                     python image, take every Debian update.
 #                                     Run on each host before a release.
-#   ./refresh-base.sh --if-missing    Build only when this host has no template
-#                                     for this Dockerfile.base (deploy.sh).
+#   ./refresh-base.sh --check         Exit 0 and print when it was built if this
+#                                     host has the template, 1 if it has not,
+#                                     2 if docker failed (deploy.sh).
 #   ./refresh-base.sh --print-tag     Print the tag and exit.
 #
 # Options:
@@ -24,20 +25,26 @@ set -euo pipefail
 #   --security-mirror URL   Debian security mirror, e.g.
 #                           http://mirror.sg.gs/debian-security
 #                           (or DEBIAN_SECURITY_MIRROR)
+#   --imagemagick FILE      The ImageMagick AppImage Dockerfile.base pins, to
+#                           use instead of downloading it from GitHub (or
+#                           IMAGEMAGICK_APPIMAGE). Checked against the same
+#                           SHA-256, so a wrong file fails the build.
 
 cd "$(dirname "$0")"
 
 MODE=refresh
 MIRROR="${DEBIAN_MIRROR:-}"
 SECURITY_MIRROR="${DEBIAN_SECURITY_MIRROR:-}"
+IMAGEMAGICK="${IMAGEMAGICK_APPIMAGE:-}"
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --if-missing) MODE=if-missing ;;
+        --check) MODE=check ;;
         --print-tag) MODE=print-tag ;;
         --mirror) shift; MIRROR="${1:?--mirror needs a URL}" ;;
         --security-mirror) shift; SECURITY_MIRROR="${1:?--security-mirror needs a URL}" ;;
-        -h|--help) sed -n '4,27p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --imagemagick) shift; IMAGEMAGICK="${1:?--imagemagick needs a file}" ;;
+        -h|--help) sed -n '4,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "ERROR: unknown argument: $1" >&2; exit 1 ;;
     esac
     shift
@@ -60,12 +67,15 @@ have_template() {
     fi
     case "$err" in
         *"No such image"*) return 1 ;;
-        *) echo "ERROR: docker image inspect $TAG failed: $err" >&2; exit 1 ;;
+        *) echo "ERROR: docker image inspect $TAG failed: $err" >&2; exit 2 ;;
     esac
 }
 
-if [ "$MODE" = if-missing ] && have_template; then
-    echo "==> Template $TAG is here; built $(docker run --rm "$TAG" sed -n 's/^built: //p' /etc/server_hosting_base.txt)"
+if [ "$MODE" = check ]; then
+    have_template || exit 1
+    BUILT="$(docker run --rm "$TAG" sed -n 's/^built: //p' /etc/server_hosting_base.txt)" \
+        || { echo "ERROR: could not read $TAG's build record" >&2; exit 2; }
+    echo "$BUILT"
     exit 0
 fi
 
@@ -74,13 +84,18 @@ echo "==> Building template $TAG from scratch"
 [ -n "$SECURITY_MIRROR" ] && echo "    Debian security mirror: $SECURITY_MIRROR"
 
 # --pull and --no-cache: a refresh is for taking updates, so nothing is reused.
-# The build context is empty: Dockerfile.base copies no file.
-EMPTY_CONTEXT="$(mktemp -d)"
-trap 'rmdir "$EMPTY_CONTEXT"' EXIT
+# The build context holds nothing but the ImageMagick AppImage, when given.
+CONTEXT="$(mktemp -d)"
+trap 'rm -rf "$CONTEXT"' EXIT
+if [ -n "$IMAGEMAGICK" ]; then
+    [ -f "$IMAGEMAGICK" ] || { echo "ERROR: --imagemagick: no such file: $IMAGEMAGICK" >&2; exit 1; }
+    echo "    ImageMagick from: $IMAGEMAGICK"
+    cp "$IMAGEMAGICK" "$CONTEXT/magick.AppImage"
+fi
 docker build --pull --no-cache \
     --build-arg "DEBIAN_MIRROR=$MIRROR" \
     --build-arg "DEBIAN_SECURITY_MIRROR=$SECURITY_MIRROR" \
-    -f Dockerfile.base -t "$TAG" "$EMPTY_CONTEXT"
+    -f Dockerfile.base -t "$TAG" "$CONTEXT"
 
 echo "==> Template $TAG built:"
 docker run --rm "$TAG" sed -n '1,6s/^/    /p' /etc/server_hosting_base.txt

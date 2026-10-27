@@ -481,12 +481,34 @@ if [ -n "$EXTRA_ENV_NAMES$EXTRA_SECRET_ENV_NAMES" ]; then
     COMPOSE_FILES+=(-f "$OVERRIDE_FILE")
 fi
 
-# The template (Dockerfile.base) is built once per host and kept; a deploy
-# builds it only when this host has none for this Dockerfile.base. It is done
-# before the stack is stopped, so a slow or failed template build leaves the
-# running server alone. To take security updates, run refresh-base.sh.
+# The template (Dockerfile.base) is built once per host and kept. A deploy
+# builds it when this host has none for this Dockerfile.base, and otherwise
+# offers to rebuild it, taking security updates (answer yes on the first deploy
+# after a release is cut). No terminal means no question: the template is
+# reused. This runs before the stack is stopped, so a slow or failed template
+# build leaves the running server alone. DEBIAN_MIRROR and
+# DEBIAN_SECURITY_MIRROR, if set, pick the mirrors for a build.
 BASE_IMAGE="$(./refresh-base.sh --print-tag)"
-./refresh-base.sh --if-missing
+BASE_STATUS=0
+BASE_BUILT="$(./refresh-base.sh --check)" || BASE_STATUS=$?
+case "$BASE_STATUS" in
+    0)
+        echo "==> Template $BASE_IMAGE, built $BASE_BUILT"
+        if { true >/dev/tty; } 2>/dev/null; then
+            printf 'Rebuild the template now, taking security updates? [y/N]: ' > /dev/tty
+            read -r _go < /dev/tty || true
+            case "${_go:-N}" in [yY]*) ./refresh-base.sh ;; *) echo "    Reusing it." ;; esac
+        fi
+        ;;
+    1)
+        echo "==> No template $BASE_IMAGE on this host yet; building it."
+        ./refresh-base.sh
+        ;;
+    *)
+        echo "ERROR: could not check for the template $BASE_IMAGE" >&2
+        exit 1
+        ;;
+esac
 export BASE_IMAGE
 
 # A deploy takes the stack down, rebuilds the image and brings it back, so on a
