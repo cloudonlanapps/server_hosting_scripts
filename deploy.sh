@@ -481,6 +481,14 @@ if [ -n "$EXTRA_ENV_NAMES$EXTRA_SECRET_ENV_NAMES" ]; then
     COMPOSE_FILES+=(-f "$OVERRIDE_FILE")
 fi
 
+# The template (Dockerfile.base) is built once per host and kept; a deploy
+# builds it only when this host has none for this Dockerfile.base. It is done
+# before the stack is stopped, so a slow or failed template build leaves the
+# running server alone. To take security updates, run refresh-base.sh.
+BASE_IMAGE="$(./refresh-base.sh --print-tag)"
+./refresh-base.sh --if-missing
+export BASE_IMAGE
+
 # A deploy takes the stack down, rebuilds the image and brings it back, so on a
 # live environment it is an outage. Say so and ask, when there is something
 # running and someone to ask. No terminal means no prompt, so CI is unaffected.
@@ -510,7 +518,7 @@ if [ "$RESET_DB" = true ]; then
     echo "    Database data cleared from $DATA_DIR/db"
 fi
 
-echo "==> Building and starting containers..."
+echo "==> Building and starting containers on $BASE_IMAGE..."
 docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILES[@]}" build --no-cache
 docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILES[@]}" up -d
 

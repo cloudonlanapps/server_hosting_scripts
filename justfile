@@ -50,6 +50,11 @@ deploy env="": _require-conf
 restart env="": _require-conf
     @if [ -z "{{env}}" ]; then just --list; else "$SCRIPTS/restart-conf.sh" "$CONF" "{{env}}"; fi
 
+# Rebuild this host's template image from scratch, taking every security update.
+# Run before a release. Extra arguments go to refresh-base.sh (--mirror URL ...).
+refresh-base *args:
+    @"$SCRIPTS/refresh-base.sh" {{args}}
+
 # Stop <env>. No secrets needed.
 stop env="": _require-conf
     @if [ -z "{{env}}" ]; then just --list; else "$SCRIPTS/stop-conf.sh" "$CONF" "{{env}}"; fi

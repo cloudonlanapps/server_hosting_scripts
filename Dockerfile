@@ -1,96 +1,15 @@
 # syntax=docker/dockerfile:1
-FROM python:3.12-slim
-
-# Install dependencies:
-# - curl: for healthcheck
-# - git: for cloning from GitHub
-# - postgresql-client: for pg_isready in entrypoint
-# - ffmpeg, poppler-utils: image/video/PDF conversion pipeline used by uploads
-# - wget, ca-certificates: fetching the ImageMagick v7 portable binary below
-ENV DEBIAN_FRONTEND=noninteractive
-ENV DEBCONF_NONINTERACTIVE_SEEN=true
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl \
-        git \
-        postgresql-client \
-        ffmpeg \
-        poppler-utils \
-        ca-certificates \
-        wget \
-    && rm -rf /var/lib/apt/lists/* \
-    # ImageMagick v7 — Debian ships only v6 (no `magick` binary that the
-    # server's media_convert.sh requires). Pull a pinned release AppImage
-    # from GitHub (bytes are immutable per tag) and verify its SHA-256
-    # before installing. Bump IM_VERSION + IM_SHA256 together to upgrade.
-    && IM_VERSION=7.1.2-23 \
-    && IM_SHA256=394276441870822786a8bb0ef8ec56db744567d2662ba5c1e1404e2ad969a28b \
-    && wget -O /tmp/magick.AppImage \
-        "https://github.com/ImageMagick/ImageMagick/releases/download/${IM_VERSION}/ImageMagick-${IM_VERSION}-gcc-x86_64.AppImage" \
-    && echo "${IM_SHA256}  /tmp/magick.AppImage" | sha256sum -c - \
-    && chmod +x /tmp/magick.AppImage \
-    # Docker has no FUSE, so extract the AppImage instead of executing it.
-    && (cd /opt && /tmp/magick.AppImage --appimage-extract >/dev/null) \
-    && mv /opt/squashfs-root /opt/imagemagick \
-    && ln -s /opt/imagemagick/AppRun /usr/local/bin/magick \
-    && rm /tmp/magick.AppImage \
-    && magick -version | head -1
-
-# Distrust every emSign root (eMudhra CA incident, October 2026), as the
-# hosts do. Debian's ca-certificates still ships some of them, so mark each
-# one with "!" in ca-certificates.conf and rebuild /etc/ssl/certs. The build
-# fails if any is left.
-RUN sed -i 's|^\(mozilla/emSign_.*\)$|!\1|' /etc/ca-certificates.conf \
-    && update-ca-certificates --fresh >/dev/null \
-    && if ls /etc/ssl/certs | grep -qi emsign; then \
-        echo "ERROR: an emSign root is still trusted"; exit 1; \
-    fi \
-    && echo "no emSign roots in /etc/ssl/certs"
-
-# The base image's pip lags behind security fixes; 26.2.2 is the oldest
-# release with the emSign fix.
-ARG PIP_MIN=26.2.2
-RUN pip install --no-cache-dir --root-user-action=ignore --upgrade "pip>=${PIP_MIN}" \
-    && PIP_VERSION="$(pip --version | cut -d' ' -f2)" \
-    && if [ "$(printf '%s\n' "$PIP_MIN" "$PIP_VERSION" | sort -V | head -1)" != "$PIP_MIN" ]; then \
-        echo "ERROR: pip $PIP_VERSION is older than $PIP_MIN"; exit 1; \
-    fi \
-    && echo "pip $PIP_VERSION"
-
-# Build-time smoke test of the upload-conversion pipeline. The tools we
-# just installed (magick / ffmpeg) are themselves used to synthesize tiny
-# sample inputs, then we run them through the same conversions the
-# server's media_convert.sh performs on real uploads. Any failure breaks
-# the build, so a broken image can never be deployed.
 #
-# Verified paths:
-#   image  → magick resize + WebP encode
-#   video  → ffmpeg H.264 encode + libwebp_anim encoder present
-RUN set -e \
-    && mkdir -p /tmp/media_check \
-    && cd /tmp/media_check \
-    # Image path.
-    && magick -size 100x100 xc:red sample.png \
-    && magick sample.png -resize 100x100 -quality 90 sample.webp \
-    && test -s sample.webp \
-    # Video path.
-    && ffmpeg -hide_banner -loglevel error -y \
-        -f lavfi -i color=c=blue:s=320x240:d=2 \
-        -c:v libx264 sample.mp4 \
-    && test -s sample.mp4 \
-    && ffmpeg -hide_banner -encoders 2>/dev/null \
-        | grep -q "libwebp_anim" \
-    # pdftoppm is the only PDF tool we use; sanity-check it loads.
-    && pdftoppm -v >/dev/null 2>&1 \
-    && rm -rf /tmp/media_check \
-    && echo "media-conversion smoke test passed"
+# The deploy's image: this host's template (Dockerfile.base, built by
+# refresh-base.sh) plus the server's code. Only what changes between deploys
+# is here: the clone, its dependencies and the entrypoint.
+#
+# deploy.sh passes BASE_IMAGE, the template's tag for this Dockerfile.base, and
+# builds the template first if this host does not have it.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
 
 WORKDIR /app
-
-# Install uv. Pinned to a release: ":latest" resolves to whatever copy the
-# build host already holds, even with --no-cache, so it can go stale.
-# Bump this to upgrade uv.
-COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /usr/local/bin/uv
-RUN uv --version
 
 # Clone source from GitHub using HTTPS.
 #
