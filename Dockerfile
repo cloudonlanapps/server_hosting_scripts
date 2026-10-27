@@ -86,8 +86,25 @@ RUN --mount=type=secret,id=gh_token \
     # Remove git static folder - will be mounted from host
     && rm -rf /app/static
 
-# Install dependencies (without dev dependencies)
-RUN uv sync --frozen --no-dev
+# Install dependencies (without dev dependencies).
+#
+# uv's download cache is a BuildKit cache mount, kept on the host across
+# builds (--no-cache does not clear it), so a deploy downloads only the
+# packages this host has not fetched before; uv.lock's hashes still check
+# every one. The venv gets copies, since the cache is not in the image.
+#
+# UV_OFFLINE set (any value) installs from that cache alone, never asking
+# PyPI: for a day PyPI is unreachable from this host and the cache already
+# holds every package uv.lock names.
+ENV UV_LINK_MODE=copy
+ARG UV_OFFLINE=
+RUN --mount=type=cache,id=server_hosting_uv,target=/root/.cache/uv \
+    if [ -n "$UV_OFFLINE" ]; then \
+        echo "==> uv sync offline, from this host's cache"; \
+        uv sync --frozen --no-dev --offline; \
+    else \
+        env -u UV_OFFLINE uv sync --frozen --no-dev; \
+    fi
 
 # The app checks outbound TLS against certifi, which still trusts emSign
 # Root CA - G1 while the hosts and the system store above distrust every

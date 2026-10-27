@@ -29,6 +29,8 @@ services:
         # This host's template (refresh-base.sh). Set by deploy.sh; the other
         # scripts never build, so it may be unset for them.
         BASE_IMAGE: ${BASE_IMAGE:-}
+        # Set to install Python packages from the host's uv cache alone.
+        UV_OFFLINE: ${UV_OFFLINE:-}
       # A build secret, not a build arg: an arg is interpolated into the RUN
       # instruction, which BuildKit echoes on failure and `docker history`
       # keeps in the layer metadata. The secret is a tmpfs file visible only to

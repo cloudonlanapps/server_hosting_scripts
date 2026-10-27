@@ -233,6 +233,17 @@ just refresh-base --mirror http://mirror.sg.gs/debian \
 
 What went into a template: `docker run --rm <tag> cat /etc/server_hosting_base.txt`.
 
+### Python packages
+
+`uv sync` keeps its download cache on the host (a BuildKit cache mount shared
+by every stack there), so a deploy downloads only the packages the host has not
+fetched before, and `uv.lock`'s hashes check each one. When PyPI is unreachable
+from a host but the cache holds every package, `UV_OFFLINE=1` for a deploy
+installs from the cache alone.
+
+A deploy builds the new image before it stops the stack, so a failed build
+leaves the running server up.
+
 ### Restore
 
 Reads `backup/` in the deployment directory and nothing else — it never

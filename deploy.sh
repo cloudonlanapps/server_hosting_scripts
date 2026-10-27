@@ -521,7 +521,7 @@ if [ "${RUNNING:-0}" -gt 0 ] && { true >/dev/tty; } 2>/dev/null; then
     docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILES[@]}" ps --status running \
         --format '    {{.Name}}  {{.Status}}' 2>/dev/null || true
     echo
-    echo "Deploying stops it, rebuilds the image and starts it again."
+    echo "Deploying rebuilds the image, then stops it and starts it again."
     if [ "$RESET_DB" = true ]; then
         echo "--reset will ALSO delete the database at $DATA_DIR/db."
     fi
@@ -529,6 +529,11 @@ if [ "${RUNNING:-0}" -gt 0 ] && { true >/dev/tty; } 2>/dev/null; then
     read -r _go < /dev/tty || true
     case "${_go:-N}" in [yY]*) ;; *) echo "Aborted."; exit 1 ;; esac
 fi
+
+# Build while the old stack still runs: a build that fails (a slow PyPI, a
+# broken clone) leaves it up, and the outage is only the restart.
+echo "==> Building the image on $BASE_IMAGE..."
+docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILES[@]}" build --no-cache
 
 echo "==> Stopping existing containers for $COMPOSE_PROJECT_NAME..."
 docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILES[@]}" down 2>/dev/null || true
@@ -540,8 +545,7 @@ if [ "$RESET_DB" = true ]; then
     echo "    Database data cleared from $DATA_DIR/db"
 fi
 
-echo "==> Building and starting containers on $BASE_IMAGE..."
-docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILES[@]}" build --no-cache
+echo "==> Starting containers..."
 docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILES[@]}" up -d
 
 # Function to wait for containers to become healthy
